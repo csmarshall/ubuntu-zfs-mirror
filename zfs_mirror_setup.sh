@@ -2153,22 +2153,14 @@ done
 SCRUB_EOF
 chmod +x /etc/cron.monthly/zfs-scrub
 
-# CRITICAL UBUNTU 24.04 ZFS BUG WORKAROUND
-# Ubuntu 24.04's ZFS packages still depend on deprecated systemd-udev-settle.service
-# which causes 2+ minute boot delays. This is a known Ubuntu packaging bug.
-#
-# Affected services: zfs-load-module, zfs-import-cache, zfs-import-scan,
-# zfs-volume-wait, zfs-mount all use deprecated systemd-udev-settle.service
-#
-# Workaround: Mask the deprecated service to prevent boot delays
-log_info "UBUNTU BUG WORKAROUND: Masking deprecated systemd-udev-settle.service"
-log_info "This fixes 2+ minute boot delays caused by Ubuntu's outdated ZFS packages"
-systemctl mask systemd-udev-settle.service
+# Enable essential system services
+log_info "Ensuring essential system services are enabled"
+chroot /mnt systemctl enable systemd-timesyncd cron
 
-log_info "Ubuntu ZFS bug workaround applied successfully"
-
-# Enable ZFS services
-systemctl enable zfs-import-cache zfs-import.target zfs-mount zfs.target systemd-timesyncd cron
+# Note: Previous versions of this script masked systemd-udev-settle.service
+# to work around boot delays, but we now rely on Ubuntu's default configuration
+# for maximum compatibility and minimal system modifications
+log_info "Using Ubuntu's default systemd configuration - no custom service masking"
 
 # Update initramfs with ZFS support and proper hostid
 update-initramfs -c -k all
@@ -2307,8 +2299,435 @@ log_info "Critical component verification complete"
 
 show_progress 9 10 "Finalizing..."
 
-# Copy log
-cp "${LOG_FILE}" /mnt/var/log/
+# Create ZFS drive replacement helper script
+log_info "Creating ZFS drive replacement helper script"
+cat << 'REPLACE_SCRIPT' > /usr/local/bin/zfs-replace-drive
+#!/bin/bash
+# ZFS Mirror Drive Replacement Script
+# Helps replace a failed drive in a ZFS mirror configuration
+# Compatible with the Ubuntu ZFS Mirror installer
+
+set -euo pipefail
+
+# Color codes for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BOLD='\033[1m'
+readonly NC='\033[0m'
+
+# Logging functions
+log_info() {
+    echo -e "${GREEN}INFO:${NC} $*"
+}
+
+log_warning() {
+    echo -e "${YELLOW}WARNING:${NC} $*"
+}
+
+log_error() {
+    echo -e "${RED}ERROR:${NC} $*"
+}
+
+log_header() {
+    echo -e "\n${BOLD}========================================${NC}"
+    echo -e "${BOLD}$*${NC}"
+    echo -e "${BOLD}========================================${NC}\n"
+}
+
+# Check if running as root
+if [[ ${EUID} -ne 0 ]]; then
+    log_error "This script must be run as root (sudo)"
+    exit 1
+fi
+
+# Check if ZFS is available
+if ! command -v zpool &> /dev/null; then
+    log_error "ZFS tools not found. Is ZFS installed?"
+    exit 1
+fi
+
+# Function to display pool status with color coding
+show_pool_status() {
+    local pool="$1"
+    echo -e "${BOLD}Pool: ${pool}${NC}"
+    
+    if ! zpool list "$pool" &>/dev/null; then
+        log_error "Pool $pool not found"
+        return 1
+    fi
+    
+    local status
+    status=$(zpool status "$pool")
+    
+    # Colorize the output
+    echo "$status" | while IFS= read -r line; do
+        if [[ "$line" =~ FAULTED|UNAVAIL|OFFLINE ]]; then
+            echo -e "${RED}$line${NC}"
+        elif [[ "$line" =~ DEGRADED ]]; then
+            echo -e "${YELLOW}$line${NC}"
+        elif [[ "$line" =~ ONLINE ]] && [[ ! "$line" =~ "state: ONLINE" ]]; then
+            echo -e "${GREEN}$line${NC}"
+        else
+            echo "$line"
+        fi
+    done
+}
+
+# Function to get drive identifier
+get_drive_identifier() {
+    local disk_path="$1"
+    local identifier=""
+    
+    if [[ "$disk_path" =~ nvme-(.+)_[A-Za-z0-9]{8,} ]]; then
+        identifier="${BASH_REMATCH[1]}"
+    elif [[ "$disk_path" =~ ata-(.+)_[A-Za-z0-9]{8,} ]] || [[ "$disk_path" =~ scsi-(.+)_[A-Za-z0-9]{8,} ]]; then
+        identifier="${BASH_REMATCH[1]}"
+    else
+        local dev_name
+        dev_name=$(basename "$disk_path")
+        identifier="Disk-${dev_name}"
+    fi
+    
+    # Clean up identifier
+    identifier="${identifier//_/-}"
+    identifier="${identifier##-}"
+    identifier="${identifier%%-}"
+    
+    while [[ "$identifier" == *"--"* ]]; do
+        identifier="${identifier//--/-}"
+    done
+    
+    if [[ -z "$identifier" ]]; then
+        identifier="GenericDisk"
+    fi
+    
+    if [[ ${#identifier} -gt 18 ]]; then
+        identifier="${identifier:0:18}"
+        identifier="${identifier%%-}"
+    fi
+    
+    echo "$identifier"
+}
+
+# Main script
+log_header "ZFS Mirror Drive Replacement Tool"
+
+echo "This script helps replace a failed drive in your ZFS mirror setup."
+echo "It will guide you through the process step-by-step."
+echo ""
+
+# Step 1: Assess current system status
+log_header "Step 1: System Assessment"
+
+log_info "Checking ZFS pool status..."
+echo ""
+
+# Check if pools exist
+if ! zpool list rpool &>/dev/null || ! zpool list bpool &>/dev/null; then
+    log_error "Required ZFS pools (rpool, bpool) not found"
+    log_error "This script is designed for systems installed with the ZFS mirror installer"
+    exit 1
+fi
+
+show_pool_status "rpool"
+echo ""
+show_pool_status "bpool"
+echo ""
+
+# Check if any pools are degraded
+DEGRADED_POOLS=()
+if zpool status rpool | grep -q "DEGRADED\|FAULTED\|UNAVAIL"; then
+    DEGRADED_POOLS+=("rpool")
+fi
+if zpool status bpool | grep -q "DEGRADED\|FAULTED\|UNAVAIL"; then
+    DEGRADED_POOLS+=("bpool")
+fi
+
+if [[ ${#DEGRADED_POOLS[@]} -eq 0 ]]; then
+    log_info "All pools appear healthy. No replacement needed."
+    echo ""
+    echo -en "Continue anyway for testing/demonstration? (y/N): "
+    read -r response
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+        exit 0
+    fi
+else
+    log_warning "Degraded pools detected: ${DEGRADED_POOLS[*]}"
+    log_warning "Drive replacement is recommended"
+fi
+
+# Step 2: Identify drives
+log_header "Step 2: Drive Identification"
+
+log_info "Available drives:"
+ls -la /dev/disk/by-id/ | grep -E "(nvme|ata|scsi)" | grep -v part | while read -r line; do
+    echo "  $line"
+done
+
+echo ""
+log_info "Current ZFS configuration:"
+
+# Get current mirror members
+RPOOL_DRIVES=()
+BPOOL_DRIVES=()
+
+while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*(/dev/|nvme-|ata-|scsi-) ]]; then
+        drive=$(echo "$line" | awk '{print $1}' | sed 's/[[:space:]]*$//')
+        if [[ "$drive" =~ -part4$ ]]; then
+            RPOOL_DRIVES+=("${drive%-part*}")
+        elif [[ "$drive" =~ -part3$ ]]; then
+            BPOOL_DRIVES+=("${drive%-part*}")
+        fi
+    fi
+done < <(zpool status rpool bpool)
+
+# Remove duplicates and display
+MIRROR_DRIVES=($(printf '%s\n' "${RPOOL_DRIVES[@]}" "${BPOOL_DRIVES[@]}" | sort -u))
+
+echo "Mirror drives in use:"
+for drive in "${MIRROR_DRIVES[@]}"; do
+    if [[ -b "$drive" ]] || [[ -L "$drive" ]]; then
+        echo -e "  ${GREEN}✓ $drive${NC} (present)"
+    else
+        echo -e "  ${RED}✗ $drive${NC} (missing/failed)"
+    fi
+done
+
+# Step 3: Get replacement drive
+echo ""
+log_header "Step 3: Drive Replacement"
+
+echo "Please ensure you have:"
+echo "1. Powered down the system"
+echo "2. Physically replaced the failed drive"
+echo "3. Powered back on and booted from the working drive"
+echo ""
+
+echo -en "Have you completed the physical drive replacement? (y/N): "
+read -r response
+if [[ ! "$response" =~ ^[Yy]$ ]]; then
+    log_info "Please complete the physical replacement and run this script again"
+    exit 0
+fi
+
+echo ""
+log_info "Detecting new drive..."
+
+# Find drives not currently in use by ZFS
+AVAILABLE_DRIVES=()
+for drive in /dev/disk/by-id/nvme-* /dev/disk/by-id/ata-* /dev/disk/by-id/scsi-*; do
+    if [[ -e "$drive" ]] && [[ ! "$drive" =~ -part[0-9]+$ ]]; then
+        # Check if this drive is already in the mirror
+        drive_in_use=false
+        for mirror_drive in "${MIRROR_DRIVES[@]}"; do
+            if [[ "$drive" == "$mirror_drive" ]] && ([[ -b "$drive" ]] || [[ -L "$drive" ]]); then
+                drive_in_use=true
+                break
+            fi
+        done
+        
+        if [[ "$drive_in_use" == "false" ]]; then
+            AVAILABLE_DRIVES+=("$drive")
+        fi
+    fi
+done
+
+if [[ ${#AVAILABLE_DRIVES[@]} -eq 0 ]]; then
+    log_error "No new drives detected. Please check that the new drive is properly connected."
+    exit 1
+fi
+
+echo "Available replacement drives:"
+for i in "${!AVAILABLE_DRIVES[@]}"; do
+    echo "$((i+1)). ${AVAILABLE_DRIVES[$i]}"
+done
+
+echo ""
+echo -en "Select the replacement drive [1-${#AVAILABLE_DRIVES[@]}]: "
+read -r selection
+
+if ! [[ "$selection" =~ ^[0-9]+$ ]] || [[ "$selection" -lt 1 ]] || [[ "$selection" -gt ${#AVAILABLE_DRIVES[@]} ]]; then
+    log_error "Invalid selection"
+    exit 1
+fi
+
+NEW_DRIVE="${AVAILABLE_DRIVES[$((selection-1))]}"
+log_info "Selected replacement drive: $NEW_DRIVE"
+
+# Get working drive for partition table copy
+WORKING_DRIVE=""
+for drive in "${MIRROR_DRIVES[@]}"; do
+    if [[ -b "$drive" ]] || [[ -L "$drive" ]]; then
+        WORKING_DRIVE="$drive"
+        break
+    fi
+done
+
+if [[ -z "$WORKING_DRIVE" ]]; then
+    log_error "No working drive found to copy partition table from"
+    exit 1
+fi
+
+log_info "Using $WORKING_DRIVE as template for partition table"
+
+# Step 4: Partition the new drive
+log_header "Step 4: Partitioning New Drive"
+
+log_warning "This will destroy all data on $NEW_DRIVE"
+echo -en "Continue? (y/N): "
+read -r response
+if [[ ! "$response" =~ ^[Yy]$ ]]; then
+    log_info "Aborted by user"
+    exit 0
+fi
+
+log_info "Copying partition table from $WORKING_DRIVE to $NEW_DRIVE..."
+sgdisk --replicate="$NEW_DRIVE" "$WORKING_DRIVE"
+sgdisk --randomize-guids "$NEW_DRIVE"
+
+# Inform kernel
+partprobe "$NEW_DRIVE"
+udevadm settle
+sleep 2
+
+log_info "Partitioning completed"
+
+# Step 5: Replace in ZFS pools
+log_header "Step 5: ZFS Pool Recovery"
+
+# Find the failed device names for replacement
+FAILED_RPOOL_DEVICE=""
+FAILED_BPOOL_DEVICE=""
+
+# Look for failed devices in pool status
+while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*([^[:space:]]+)[[:space:]]+(FAULTED|UNAVAIL|OFFLINE) ]]; then
+        device="${BASH_REMATCH[1]}"
+        if [[ "$device" =~ part4 ]]; then
+            FAILED_RPOOL_DEVICE="$device"
+        elif [[ "$device" =~ part3 ]]; then
+            FAILED_BPOOL_DEVICE="$device"
+        fi
+    fi
+done < <(zpool status rpool bpool)
+
+# Replace in rpool
+if [[ -n "$FAILED_RPOOL_DEVICE" ]]; then
+    log_info "Replacing $FAILED_RPOOL_DEVICE with ${NEW_DRIVE}-part4 in rpool..."
+    zpool replace rpool "$FAILED_RPOOL_DEVICE" "${NEW_DRIVE}-part4"
+else
+    log_info "No failed device found in rpool, adding as additional mirror member..."
+    zpool attach rpool $(zpool status rpool | grep -E "part4" | head -1 | awk '{print $1}') "${NEW_DRIVE}-part4"
+fi
+
+# Replace in bpool
+if [[ -n "$FAILED_BPOOL_DEVICE" ]]; then
+    log_info "Replacing $FAILED_BPOOL_DEVICE with ${NEW_DRIVE}-part3 in bpool..."
+    zpool replace bpool "$FAILED_BPOOL_DEVICE" "${NEW_DRIVE}-part3"
+else
+    log_info "No failed device found in bpool, adding as additional mirror member..."
+    zpool attach bpool $(zpool status bpool | grep -E "part3" | head -1 | awk '{print $1}') "${NEW_DRIVE}-part3"
+fi
+
+log_info "ZFS resilver started. This may take several hours depending on data size."
+
+# Step 6: Set up EFI and swap
+log_header "Step 6: EFI and Swap Setup"
+
+log_info "Creating EFI filesystem on ${NEW_DRIVE}-part1..."
+mkdosfs -F 32 -s 1 -n "EFI" "${NEW_DRIVE}-part1"
+
+log_info "Creating swap on ${NEW_DRIVE}-part2..."
+mkswap "${NEW_DRIVE}-part2"
+swapon "${NEW_DRIVE}-part2"
+
+# Step 7: Monitor resilver
+log_header "Step 7: Monitor Progress"
+
+log_info "Resilver progress (press Ctrl+C to stop monitoring):"
+echo ""
+
+trap 'echo -e "\nStopping monitor..."; exit 0' SIGINT
+
+while true; do
+    clear
+    show_pool_status "rpool"
+    echo ""
+    show_pool_status "bpool"
+    
+    # Check if resilver is complete
+    if ! zpool status rpool | grep -q "resilver\|resilvering" && ! zpool status bpool | grep -q "resilver\|resilvering"; then
+        log_info "Resilver completed!"
+        break
+    fi
+    
+    sleep 30
+done
+
+# Step 8: Final setup
+log_header "Step 8: Final Configuration"
+
+log_info "Running EFI partition sync..."
+if command -v /usr/local/bin/sync-efi-partitions &>/dev/null; then
+    /usr/local/bin/sync-efi-partitions
+else
+    log_warning "EFI sync script not found, manually installing GRUB..."
+    
+    # Manual GRUB installation
+    mkdir -p /tmp/new-efi
+    mount "${NEW_DRIVE}-part1" /tmp/new-efi
+    
+    DRIVE_ID=$(get_drive_identifier "$NEW_DRIVE")
+    grub-install --target=x86_64-efi --efi-directory=/tmp/new-efi \
+        --bootloader-id="Ubuntu-${DRIVE_ID}" --recheck --no-floppy
+    
+    umount /tmp/new-efi
+    rmdir /tmp/new-efi
+    
+    log_info "GRUB installed with bootloader ID: Ubuntu-${DRIVE_ID}"
+fi
+
+# Final verification
+log_header "Final Verification"
+
+log_info "Final pool status:"
+show_pool_status "rpool"
+echo ""
+show_pool_status "bpool"
+echo ""
+
+log_info "EFI bootloader entries:"
+efibootmgr -v | head -10
+
+echo ""
+log_info "Swap status:"
+swapon --show
+
+echo ""
+if zpool status rpool | grep -q "ONLINE" && zpool status bpool | grep -q "ONLINE" && \
+   ! zpool status rpool | grep -q "FAULTED\|UNAVAIL\|DEGRADED" && \
+   ! zpool status bpool | grep -q "FAULTED\|UNAVAIL\|DEGRADED"; then
+    
+    log_info "🎉 Drive replacement completed successfully!"
+    echo ""
+    echo "Your ZFS mirror is now fully redundant again."
+    echo "Both drives are bootable and the system is ready for use."
+    echo ""
+    echo -e "${GREEN}Recommended next steps:${NC}"
+    echo "1. Test boot from both drives to verify redundancy"
+    echo "2. Monitor system logs for any issues"
+    echo "3. Consider running a scrub: sudo zpool scrub rpool"
+else
+    log_warning "Drive replacement completed but some issues remain."
+    echo "Please review the pool status above and resolve any remaining issues."
+fi
+
+REPLACE_SCRIPT
+
+chmod +x /usr/local/bin/zfs-replace-drive
+log_info "ZFS drive replacement script installed: /usr/local/bin/zfs-replace-drive"
 
 show_progress 10 10 "Installation complete!"
 
