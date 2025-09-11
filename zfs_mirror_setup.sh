@@ -3,14 +3,14 @@
 # Ubuntu 24.04 ZFS Root Installation Script
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 3.3.1 - Fixed EFI sync path resolution bug
+# Version: 3.3.2 - Fixed USE_PERFORMANCE_TUNABLES unbound variable
 # License: MIT
 # Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="3.3.1"
+readonly VERSION="3.3.2"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -849,8 +849,24 @@ configure_system_preferences() {
         USE_APPARMOR=true
         log_info "AppArmor will remain enabled (Ubuntu default)"
     fi
+
+    # Ask about performance tunables
+    echo ""
+    echo -e "${BOLD}Performance Configuration:${NC}"
+    echo -e "Performance tunables can optimize the system for server workloads."
+    echo -e "These include settings for swap behavior, network optimization, and ZFS."
+    echo -e "Recommended for server environments, optional for desktop use."
+    echo -en "${BOLD}Apply performance tunables? (Y/n): ${NC}"
+    read -r response
+    if [[ "${response}" =~ ^[Nn]$ ]]; then
+        USE_PERFORMANCE_TUNABLES=false
+        log_info "Using Ubuntu default system tunable values"
+    else
+        USE_PERFORMANCE_TUNABLES=true
+        log_info "Performance tunables will be applied"
+    fi
         
-    export USE_SERIAL_CONSOLE SERIAL_PORT SERIAL_SPEED SERIAL_UNIT USE_APPARMOR
+    export USE_SERIAL_CONSOLE SERIAL_PORT SERIAL_SPEED SERIAL_UNIT USE_APPARMOR USE_PERFORMANCE_TUNABLES
 }
 
 # Create admin user with improved validation
@@ -2191,6 +2207,7 @@ chroot /mnt /usr/bin/env \
     SERIAL_SPEED="${SERIAL_SPEED:-115200}" \
     SERIAL_UNIT="${SERIAL_UNIT:-1}" \
     USE_APPARMOR="${USE_APPARMOR:-true}" \
+    USE_PERFORMANCE_TUNABLES="${USE_PERFORMANCE_TUNABLES:-false}" \
     bash /tmp/configure_system.sh
 
 # Verify the chroot script completed successfully
@@ -2758,6 +2775,12 @@ if [[ "${USE_APPARMOR:-true}" == "true" ]]; then
     echo -e "  • AppArmor: ${GREEN}Enabled${NC}"
 else
     echo -e "  • AppArmor: ${YELLOW}Disabled${NC}"
+fi
+
+if [[ "${USE_PERFORMANCE_TUNABLES:-false}" == "true" ]]; then
+    echo -e "  • Performance Tunables: ${GREEN}Applied${NC}"
+else
+    echo -e "  • Performance Tunables: ${YELLOW}Default Ubuntu settings${NC}"
 fi
 
 echo ""
