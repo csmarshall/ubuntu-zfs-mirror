@@ -3,14 +3,14 @@
 # Ubuntu 24.04 ZFS Root Installation Script
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 3.3.2 - Fixed USE_PERFORMANCE_TUNABLES unbound variable
+# Version: 3.3.5 - Fixed file paths, systemctl commands, and renamed replacement script
 # License: MIT
 # Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="3.3.4"
+readonly VERSION="3.3.5"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -2171,7 +2171,7 @@ chmod +x /etc/cron.monthly/zfs-scrub
 
 # Enable essential system services
 log_info "Ensuring essential system services are enabled"
-chroot /mnt systemctl enable systemd-timesyncd cron
+systemctl enable systemd-timesyncd cron
 
 # Note: Previous versions of this script masked systemd-udev-settle.service
 # to work around boot delays, but we now rely on Ubuntu's default configuration
@@ -2316,13 +2316,36 @@ log_info "Critical component verification complete"
 
 show_progress 9 10 "Finalizing..."
 
-# Create ZFS drive replacement helper script
-log_info "Creating ZFS drive replacement helper script"
-cat << 'REPLACE_SCRIPT' > /usr/local/bin/zfs-replace-drive
+# Create ZFS drive replacement helper script - UPDATED WITH NEW NAME AND CLEAR WARNINGS
+log_info "Creating ZFS mirror drive replacement helper script"
+cat << 'REPLACE_SCRIPT' > /mnt/usr/local/bin/zfs-mirror-replace-drive
 #!/bin/bash
-# ZFS Mirror Drive Replacement Script
-# Helps replace a failed drive in a ZFS mirror configuration
-# Compatible with the Ubuntu ZFS Mirror installer
+
+# ============================================================================
+# ZFS MIRROR DRIVE REPLACEMENT SCRIPT
+# ============================================================================
+# 
+# ⚠️  CRITICAL: This script is SPECIFICALLY designed for ZFS mirror systems
+#    created by the Ubuntu 24.04 ZFS Mirror Root Installer script.
+#
+# ⚠️  DO NOT USE on systems with different ZFS configurations:
+#    - Single disk ZFS installations
+#    - RAID-Z configurations (raidz, raidz2, raidz3)
+#    - Multi-disk mirrors (3+ drives)
+#    - Non-standard pool names
+#    - Systems not created by the installer script
+#
+# ⚠️  This script ONLY works with the specific configuration created by
+#    the Ubuntu ZFS Mirror installer:
+#    - Exactly 2 drives in mirror configuration
+#    - Pool names: "rpool" (root) and "bpool" (boot)
+#    - 4-partition layout per drive (EFI, Swap, Boot, Root)
+#    - Ubuntu 24.04 with specific ZFS layout
+#
+# If your system was NOT created by the Ubuntu ZFS Mirror installer script,
+# DO NOT USE THIS SCRIPT. Use standard ZFS replacement procedures instead.
+#
+# ============================================================================
 
 set -euo pipefail
 
@@ -2352,6 +2375,102 @@ log_header() {
     echo -e "${BOLD}========================================${NC}\n"
 }
 
+# Verify system compatibility with this script
+verify_system_compatibility() {
+    log_header "System Compatibility Check"
+    
+    echo -e "${YELLOW}${BOLD}⚠️  CRITICAL COMPATIBILITY WARNING ⚠️${NC}"
+    echo ""
+    echo -e "${RED}This script is ONLY for ZFS mirrors created by the${NC}"
+    echo -e "${RED}Ubuntu 24.04 ZFS Mirror Root Installer script.${NC}"
+    echo ""
+    echo -e "${BOLD}This script will NOT work correctly on:${NC}"
+    echo "  ❌ Single disk ZFS installations"
+    echo "  ❌ RAID-Z configurations (raidz, raidz2, raidz3)" 
+    echo "  ❌ Multi-disk mirrors (3+ drives)"
+    echo "  ❌ Non-standard pool names (not rpool/bpool)"
+    echo "  ❌ Systems created by other ZFS installers"
+    echo "  ❌ Manual ZFS installations"
+    echo ""
+    echo -e "${BOLD}This script ONLY works with:${NC}"
+    echo "  ✅ Exactly 2 drives in mirror configuration"
+    echo "  ✅ Pool names: 'rpool' (root) and 'bpool' (boot)"
+    echo "  ✅ 4-partition layout: EFI, Swap, Boot Pool, Root Pool"
+    echo "  ✅ Systems created by Ubuntu ZFS Mirror installer"
+    echo ""
+    
+    # Check basic requirements
+    local compatibility_ok=true
+    
+    # Check for exactly 2 pools with correct names
+    local pool_count=$(zpool list -H -o name 2>/dev/null | wc -l)
+    local has_rpool=$(zpool list rpool &>/dev/null && echo "yes" || echo "no")
+    local has_bpool=$(zpool list bpool &>/dev/null && echo "yes" || echo "no")
+    
+    if [[ "${pool_count}" != "2" ]] || [[ "${has_rpool}" != "yes" ]] || [[ "${has_bpool}" != "yes" ]]; then
+        echo -e "${RED}❌ INCOMPATIBLE: Expected exactly 2 pools named 'rpool' and 'bpool'${NC}"
+        echo -e "${RED}   Found ${pool_count} pool(s). Has rpool: ${has_rpool}, Has bpool: ${has_bpool}${NC}"
+        compatibility_ok=false
+    else
+        echo -e "${GREEN}✅ Pool configuration compatible${NC}"
+    fi
+    
+    # Check for mirror configuration
+    local rpool_config=$(zpool status rpool 2>/dev/null | grep -c "mirror-" || echo "0")
+    local bpool_config=$(zpool status bpool 2>/dev/null | grep -c "mirror-" || echo "0")
+    
+    if [[ "${rpool_config}" != "1" ]] || [[ "${bpool_config}" != "1" ]]; then
+        echo -e "${RED}❌ INCOMPATIBLE: Pools are not in mirror configuration${NC}"
+        echo -e "${RED}   This script only works with 2-drive mirrors${NC}"
+        compatibility_ok=false
+    else
+        echo -e "${GREEN}✅ Mirror configuration detected${NC}"
+    fi
+    
+    # Check drive count in mirrors
+    local rpool_drives=$(zpool status rpool 2>/dev/null | grep -E "^\s+(/dev/|nvme-|ata-|scsi-)" | wc -l)
+    local bpool_drives=$(zpool status bpool 2>/dev/null | grep -E "^\s+(/dev/|nvme-|ata-|scsi-)" | wc -l)
+    
+    if [[ "${rpool_drives}" != "2" ]] || [[ "${bpool_drives}" != "2" ]]; then
+        echo -e "${RED}❌ INCOMPATIBLE: Expected exactly 2 drives per mirror${NC}"
+        echo -e "${RED}   Found ${rpool_drives} drives in rpool, ${bpool_drives} drives in bpool${NC}"
+        compatibility_ok=false
+    else
+        echo -e "${GREEN}✅ Drive count compatible (2 drives per mirror)${NC}"
+    fi
+    
+    if [[ "${compatibility_ok}" != "true" ]]; then
+        echo ""
+        echo -e "${RED}${BOLD}SYSTEM INCOMPATIBLE WITH THIS SCRIPT${NC}"
+        echo ""
+        echo -e "${YELLOW}If you need to replace a drive in your ZFS configuration,${NC}"
+        echo -e "${YELLOW}please use standard ZFS replacement procedures:${NC}"
+        echo -e "${YELLOW}  - zpool replace <pool> <old-device> <new-device>${NC}"
+        echo -e "${YELLOW}  - Consult ZFS documentation for your specific setup${NC}"
+        echo ""
+        exit 1
+    fi
+    
+    echo ""
+    echo -e "${GREEN}${BOLD}✅ System appears compatible with this script${NC}"
+    echo ""
+    echo -en "${BOLD}Was your system created by the Ubuntu ZFS Mirror installer? (y/N): ${NC}"
+    read -r response
+    
+    if [[ ! "${response}" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo -e "${RED}${BOLD}STOP: This script is only for systems created by the Ubuntu ZFS Mirror installer${NC}"
+        echo ""
+        echo -e "${YELLOW}For other ZFS configurations, use standard procedures:${NC}"
+        echo -e "${YELLOW}  sudo zpool replace <pool> <failed-device> <new-device>${NC}"
+        echo ""
+        exit 1
+    fi
+    
+    echo ""
+    echo -e "${GREEN}✅ Proceeding with drive replacement for Ubuntu ZFS Mirror system${NC}"
+}
+
 # Check if running as root
 if [[ ${EUID} -ne 0 ]]; then
     log_error "This script must be run as root (sudo)"
@@ -2363,6 +2482,9 @@ if ! command -v zpool &> /dev/null; then
     log_error "ZFS tools not found. Is ZFS installed?"
     exit 1
 fi
+
+# Verify system compatibility before proceeding
+verify_system_compatibility
 
 # Function to display pool status with color coding
 show_pool_status() {
@@ -2429,8 +2551,9 @@ get_drive_identifier() {
 
 # Main script
 log_header "ZFS Mirror Drive Replacement Tool"
+log_header "For Ubuntu ZFS Mirror Systems ONLY"
 
-echo "This script helps replace a failed drive in your ZFS mirror setup."
+echo "This script helps replace a failed drive in your Ubuntu ZFS mirror setup."
 echo "It will guide you through the process step-by-step."
 echo ""
 
@@ -2439,13 +2562,6 @@ log_header "Step 1: System Assessment"
 
 log_info "Checking ZFS pool status..."
 echo ""
-
-# Check if pools exist
-if ! zpool list rpool &>/dev/null || ! zpool list bpool &>/dev/null; then
-    log_error "Required ZFS pools (rpool, bpool) not found"
-    log_error "This script is designed for systems installed with the ZFS mirror installer"
-    exit 1
-fi
 
 show_pool_status "rpool"
 echo ""
@@ -2743,8 +2859,8 @@ fi
 
 REPLACE_SCRIPT
 
-chmod +x /usr/local/bin/zfs-replace-drive
-log_info "ZFS drive replacement script installed: /usr/local/bin/zfs-replace-drive"
+chmod +x /mnt/usr/local/bin/zfs-mirror-replace-drive
+log_info "ZFS mirror drive replacement script installed: /usr/local/bin/zfs-mirror-replace-drive"
 
 show_progress 10 10 "Installation complete!"
 
@@ -2866,6 +2982,9 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     echo -e "${YELLOW}If you see boot delays, check:${NC}"
     echo -e "  ${GREEN}sudo systemctl status systemd-udev-settle.service${NC}"
     echo -e "  ${GREEN}sudo journalctl -b 0 -u systemd-udev-settle.service${NC}"
+    echo ""
+    echo -e "${GREEN}${BOLD}Drive Replacement Helper:${NC}"
+    echo -e "  If a drive fails: ${GREEN}sudo /usr/local/bin/zfs-mirror-replace-drive${NC}"
 else
     echo -e "${YELLOW}System remains mounted at /mnt${NC}"
     echo -e "${YELLOW}To manually export pools later:${NC}"
