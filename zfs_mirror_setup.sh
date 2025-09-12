@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.1.0 - Major cleanup and error handling improvements
+# Version: 4.1.1 - Fixed EFI filesystem creation with proper volume IDs
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -425,12 +425,12 @@ secure_wipe_drive() {
     return 0
 }
 
-# Generate deterministic UUID for EFI partitions with validation
-generate_efi_uuid() {
+# Generate deterministic Volume ID for EFI partitions
+generate_efi_volume_id() {
     local hostname="$1"
     
     if [[ -z "${hostname}" ]]; then
-        log_error "generate_efi_uuid: No hostname provided"
+        log_error "generate_efi_volume_id: No hostname provided"
         return 1
     fi
     
@@ -438,25 +438,26 @@ generate_efi_uuid() {
     hostname_hash=$(echo -n "${hostname}" | sha256sum | cut -c1-8 2>/dev/null)
     
     if [[ -z "${hostname_hash}" ]]; then
-        log_error "generate_efi_uuid: Failed to generate hash from hostname"
+        log_error "generate_efi_volume_id: Failed to generate hash from hostname"
         return 1
     fi
     
-    local efi_uuid="EFI-${hostname_hash:0:4}"
+    # FAT32 volume ID is 32-bit hex (8 hex digits)
+    local volume_id="${hostname_hash}"
     
-    # Validate UUID format
-    if [[ ! "${efi_uuid}" =~ ^EFI-[A-Fa-f0-9]{4}$ ]]; then
-        log_error "generate_efi_uuid: Generated invalid UUID format: ${efi_uuid}"
+    # Validate it's pure hex
+    if [[ ! "${volume_id}" =~ ^[A-Fa-f0-9]{8}$ ]]; then
+        log_error "generate_efi_volume_id: Invalid hex format: ${volume_id}"
         return 1
     fi
     
-    echo "${efi_uuid}"
+    echo "${volume_id}"
     return 0
 }
 
 # Validate required environment variables in chroot
 validate_chroot_environment() {
-    local required_vars=("DISK1" "DISK2" "EFI_UUID" "ADMIN_USER" "ADMIN_PASS")
+    local required_vars=("DISK1" "DISK2" "EFI_VOLUME_ID" "ADMIN_USER" "ADMIN_PASS")
     local missing_vars=()
     
     for var in "${required_vars[@]}"; do
@@ -1294,7 +1295,7 @@ log_message() {
 }
 
 # Get EFI UUID from fstab
-EFI_UUID=$(awk '/\/boot\/efi/ {gsub(/UUID=/, "", $1); print $1}' /etc/fstab 2>/dev/null || echo "")
+EFI_UUID=$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", $1); print $1}' /etc/fstab 2>/dev/null || echo "")
 
 if [[ -z "${EFI_UUID}" ]]; then
     log_message "ERROR: Could not find EFI UUID in fstab"
@@ -1865,27 +1866,31 @@ mount --make-private --rbind /proc /mnt/proc
 mount --make-private --rbind /sys /mnt/sys
 CHROOT_ACTIVE="yes"
 
-# Generate EFI UUID for consistent mounting
-if ! EFI_UUID=$(generate_efi_uuid "${HOSTNAME}"); then
-    log_error "Failed to generate EFI UUID"
+# Generate EFI Volume ID for consistent filesystem creation
+if ! EFI_VOLUME_ID=$(generate_efi_volume_id "${HOSTNAME}"); then
+    log_error "Failed to generate EFI Volume ID"
     exit 1
 fi
 
-# Create clean fstab
-cat > /mnt/etc/fstab << FSTAB_EOF
+# Create clean fstab - we'll update with actual UUID after EFI creation
+cat > /mnt/etc/fstab << 'FSTAB_EOF'
 # ZFS Root Installation - /etc/fstab
 # ZFS filesystems are handled automatically by ZFS services
 
-# EFI System Partition - mounted by UUID for true redundancy
-UUID=${EFI_UUID} /boot/efi vfat defaults 0 1
+# EFI System Partition - will be updated with actual UUID after creation
+# PLACEHOLDER_EFI_UUID /boot/efi vfat defaults 0 1
 
 # Swap partitions - using device paths for fast failure detection
-${PART1_SWAP} none swap sw,discard,pri=1 0 0
-${PART2_SWAP} none swap sw,discard,pri=1 0 0
+PART1_SWAP_PLACEHOLDER none swap sw,discard,pri=1 0 0
+PART2_SWAP_PLACEHOLDER none swap sw,discard,pri=1 0 0
 
 # tmpfs for /tmp (recommended for ZFS systems)
 tmpfs /tmp tmpfs defaults,noatime,mode=1777 0 0
 FSTAB_EOF
+
+# Update swap placeholders
+sed -i "s|PART1_SWAP_PLACEHOLDER|${PART1_SWAP}|" /mnt/etc/fstab
+sed -i "s|PART2_SWAP_PLACEHOLDER|${PART2_SWAP}|" /mnt/etc/fstab
 
 # Create comprehensive chroot configuration script
 cat << 'CHROOT_SCRIPT' > /mnt/tmp/configure_system.sh
@@ -1903,7 +1908,7 @@ exec 2>&1
 log_info "Starting chroot system configuration"
 
 # Validate required environment variables
-required_vars=("DISK1" "DISK2" "EFI_UUID" "ADMIN_USER" "ADMIN_PASS")
+required_vars=("DISK1" "DISK2" "EFI_VOLUME_ID" "ADMIN_USER" "ADMIN_PASS")
 missing_vars=()
 
 for var in "${required_vars[@]}"; do
@@ -1936,23 +1941,32 @@ apt-get install --yes \
     systemd-timesyncd \
     cron
 
-# Create EFI filesystems with identical UUIDs
+# Create EFI filesystems with identical volume IDs
 apt-get install --yes dosfstools
 
-log_info "Creating EFI filesystems with UUID ${EFI_UUID}"
-mkdosfs -F 32 -s 1 -n "EFI" -i "${EFI_UUID//-/}" "${PART1_EFI}"
-mkdosfs -F 32 -s 1 -n "EFI" -i "${EFI_UUID//-/}" "${PART2_EFI}"
+log_info "Creating EFI filesystems with volume ID ${EFI_VOLUME_ID}"
+mkdosfs -F 32 -s 1 -n "EFI" -i "${EFI_VOLUME_ID}" "${PART1_EFI}"
+mkdosfs -F 32 -s 1 -n "EFI" -i "${EFI_VOLUME_ID}" "${PART2_EFI}"
 
-# Verify UUIDs match
-UUID1=$(blkid -s UUID -o value "${PART1_EFI}" 2>/dev/null || echo "")
-UUID2=$(blkid -s UUID -o value "${PART2_EFI}" 2>/dev/null || echo "")
+# Get the actual UUID that will be used for mounting
+EFI_UUID=$(blkid -s UUID -o value "${PART1_EFI}" 2>/dev/null || echo "")
 
-if [[ "${UUID1}" != "${UUID2}" ]]; then
-    log_error "EFI UUID mismatch: ${UUID1} vs ${UUID2}"
+if [[ -z "${EFI_UUID}" ]]; then
+    log_error "Failed to get UUID from created EFI partition"
     exit 1
 fi
 
-log_info "EFI partitions created with matching UUID: ${UUID1}"
+# Verify both partitions have the same UUID
+UUID2=$(blkid -s UUID -o value "${PART2_EFI}" 2>/dev/null || echo "")
+if [[ "${EFI_UUID}" != "${UUID2}" ]]; then
+    log_error "EFI UUID mismatch: ${EFI_UUID} vs ${UUID2}"
+    exit 1
+fi
+
+log_info "EFI partitions created with matching UUID: ${EFI_UUID}"
+
+# Update fstab with the actual UUID
+sed -i "s|# PLACEHOLDER_EFI_UUID|UUID=${EFI_UUID}|" /etc/fstab
 
 # Mount primary EFI partition
 mkdir -p /boot/efi
@@ -2117,7 +2131,7 @@ chroot /mnt /usr/bin/env \
     ADMIN_PASS="${ADMIN_PASS}" \
     SSH_KEY="${SSH_KEY:-}" \
     USE_SSH_KEY="${USE_SSH_KEY:-false}" \
-    EFI_UUID="${EFI_UUID}" \
+    EFI_VOLUME_ID="${EFI_VOLUME_ID}" \
     DEFAULT_INTERFACE="${DEFAULT_INTERFACE}" \
     TRIM_ENABLED="${TRIM_ENABLED}" \
     USE_SERIAL_CONSOLE="${USE_SERIAL_CONSOLE:-false}" \
@@ -2170,7 +2184,7 @@ echo -e "  • ZFS Pools: ${GREEN}rpool (root), bpool (boot)${NC}"
 echo -e "  • Disk 1: ${GREEN}${DISK1} (${DISK1_NAME})${NC}"
 echo -e "  • Disk 2: ${GREEN}${DISK2} (${DISK2_NAME})${NC}"
 echo -e "  • EFI Boot: ${GREEN}UUID-based redundant mounting${NC}"
-echo -e "  • EFI UUID: ${GREEN}${EFI_UUID}${NC}"
+echo -e "  • EFI Volume ID: ${GREEN}${EFI_VOLUME_ID}${NC}"
 echo -e "  • ZFS Services: ${GREEN}Ubuntu built-in (no custom units)${NC}"
 
 if [[ "${USE_SERIAL_CONSOLE:-false}" == "true" ]]; then
