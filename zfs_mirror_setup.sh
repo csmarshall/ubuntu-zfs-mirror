@@ -1174,6 +1174,64 @@ log_message() {
 ZFS_DEFAULTS="/etc/default/zfs"
 CLEANUP_MARKER="/var/lib/zfs-first-boot-complete"
 
+# Better pool health validation
+validate_pool_health() {
+    local pool="$1"
+    local status
+
+    log_message "Validating health of pool: $pool"
+
+    # Check if pool exists and is imported
+    if ! zpool list "$pool" &>/dev/null; then
+        log_message "ERROR: Pool $pool is not imported"
+        return 1
+    fi
+
+    # Get detailed status
+    status=$(zpool status "$pool")
+
+    # Check for critical failures
+    if echo "$status" | grep -q "FAULTED\|UNAVAIL\|REMOVED"; then
+        log_message "ERROR: Pool $pool has critical failures"
+        return 1
+    fi
+
+    # Allow DEGRADED but warn (single drive failure in mirror is recoverable)
+    if echo "$status" | grep -q "DEGRADED"; then
+        log_message "WARNING: Pool $pool is DEGRADED but functional"
+    fi
+
+    # Ensure pool is ONLINE or DEGRADED (both are functional)
+    if echo "$status" | grep -q "state: ONLINE\|state: DEGRADED"; then
+        log_message "Pool $pool validation successful"
+        return 0
+    fi
+
+    log_message "ERROR: Pool $pool is in unexpected state"
+    return 1
+}
+
+# Safer config file handling
+update_zfs_config() {
+    local config_file="$1"
+    local backup_file="${config_file}.pre-cleanup.$(date +%Y%m%d-%H%M%S)"
+
+    log_message "Updating ZFS configuration"
+
+    # Create timestamped backup
+    if ! cp "$config_file" "$backup_file"; then
+        log_message "ERROR: Failed to backup ZFS config"
+        return 1
+    fi
+
+    # Remove only the force-related lines, preserve everything else
+    sed -i '/^ZPOOL_IMPORT_OPTS.*-f/d' "$config_file"
+    sed -i '/^FIRST_BOOT_FORCE=/d' "$config_file"
+
+    log_message "Updated ZFS config, backup at: $backup_file"
+    return 0
+}
+
 # Check if cleanup already completed
 if [[ -f "$CLEANUP_MARKER" ]]; then
     log_message "First boot cleanup already completed, exiting"
@@ -1182,36 +1240,37 @@ fi
 
 log_message "Starting ZFS first boot cleanup"
 
-# Verify pools are imported and healthy
-if ! zpool list rpool >/dev/null 2>&1 || ! zpool list bpool >/dev/null 2>&1; then
-    log_message "ERROR: Pools not imported, keeping force flag for safety"
+# Verify ZFS config file exists
+if [[ ! -f "$ZFS_DEFAULTS" ]]; then
+    log_message "ERROR: ZFS defaults file not found: $ZFS_DEFAULTS"
     exit 1
 fi
 
-# Check pool health
-if zpool status rpool | grep -q "DEGRADED\|FAULTED\|UNAVAIL" || zpool status bpool | grep -q "DEGRADED\|FAULTED\|UNAVAIL"; then
-    log_message "WARNING: Pools degraded, keeping force flag for safety"
-    exit 1
+# Validate both pools are healthy
+if ! validate_pool_health "rpool" || ! validate_pool_health "bpool"; then
+    log_message "Pool validation failed, will retry on next boot"
+    exit 1  # Service remains enabled for retry
 fi
 
-log_message "Pools healthy, removing force import flag"
+log_message "All pools validated successfully, proceeding with cleanup"
 
-# Backup and update ZFS defaults
-cp "$ZFS_DEFAULTS" "${ZFS_DEFAULTS}.backup"
-cat > "$ZFS_DEFAULTS" << 'ZFS_CONFIG_EOF'
-# ZFS Configuration - Updated after first successful boot
-# Host ID for this system (preserved from installation)
-ZFS_CONFIG_EOF
-
-# Preserve hostid
-grep "^HOSTID=" "${ZFS_DEFAULTS}.backup" >> "$ZFS_DEFAULTS" || true
+# Update configuration safely
+if ! update_zfs_config "$ZFS_DEFAULTS"; then
+    log_message "Failed to update ZFS configuration, will retry on next boot"
+    exit 1
+fi
 
 # Create completion marker
-touch "$CLEANUP_MARKER"
+if ! touch "$CLEANUP_MARKER"; then
+    log_message "ERROR: Failed to create completion marker"
+    exit 1
+fi
 chmod 644 "$CLEANUP_MARKER"
 
-# Disable this service
-systemctl disable zfs-first-boot-cleanup.service 2>/dev/null || true
+# Only disable service after successful cleanup
+if ! systemctl disable zfs-first-boot-cleanup.service 2>/dev/null; then
+    log_message "WARNING: Failed to disable cleanup service, but cleanup completed"
+fi
 
 log_message "First boot cleanup completed successfully"
 CLEANUP_SCRIPT
@@ -1222,14 +1281,18 @@ CLEANUP_SCRIPT
     cat << 'CLEANUP_SERVICE' > /mnt/etc/systemd/system/zfs-first-boot-cleanup.service
 [Unit]
 Description=ZFS First Boot Cleanup
-After=zfs-import.target zfs-mount.service
-Wants=zfs-import.target zfs-mount.service
+After=zfs.target multi-user.target
+Wants=zfs.target
+Requires=zfs.target
 ConditionPathExists=!/var/lib/zfs-first-boot-complete
+ConditionPathExists=/etc/default/zfs
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/zfs-first-boot-cleanup
+TimeoutStartSec=300
+Restart=no
 
 [Install]
 WantedBy=multi-user.target
@@ -2178,6 +2241,225 @@ if ! create_efi_sync_script; then
     exit 1
 fi
 
+# Create post-install test script
+log_info "Creating post-install test script..."
+create_post_install_test() {
+    cat << 'TEST_SCRIPT' > /mnt/usr/local/bin/test-zfs-mirror
+#!/bin/bash
+# ZFS Mirror Installation Test Script
+set -euo pipefail
+
+echo "=== ZFS Mirror Installation Test ==="
+echo "Generated on: $(date)"
+echo ""
+
+echo "1. Pool Status:"
+zpool status | grep -E "(pool:|state:|scan:|errors:)" || echo "  ERROR: Could not get pool status"
+echo ""
+
+echo "2. Pool Health Summary:"
+for pool in rpool bpool; do
+    if zpool list "$pool" &>/dev/null; then
+        status=$(zpool list -H -o health "$pool" 2>/dev/null || echo "UNKNOWN")
+        echo "  $pool: $status"
+    else
+        echo "  $pool: NOT FOUND"
+    fi
+done
+echo ""
+
+echo "3. ZFS Dataset Usage:"
+zfs list -o name,used,avail,refer,mountpoint | head -10
+echo ""
+
+echo "4. EFI Boot Entries:"
+efibootmgr 2>/dev/null | grep -E "(Boot|Ubuntu-)" || echo "  ERROR: Could not read EFI boot entries"
+echo ""
+
+echo "5. EFI Partition Status:"
+EFI_UUID=$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", $1); print $1}' /etc/fstab 2>/dev/null || echo "")
+if [[ -n "$EFI_UUID" ]]; then
+    echo "  EFI UUID: $EFI_UUID"
+    mapfile -t EFI_PARTS < <(blkid --output device --match-token UUID="$EFI_UUID" 2>/dev/null || true)
+    echo "  EFI Partitions found: ${#EFI_PARTS[@]}"
+    for part in "${EFI_PARTS[@]}"; do
+        echo "    $part"
+    done
+else
+    echo "  ERROR: Could not find EFI UUID in fstab"
+fi
+echo ""
+
+echo "6. Testing EFI Sync:"
+if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
+    echo "  Running EFI sync test..."
+    if /usr/local/bin/sync-efi-partitions; then
+        echo "  ✓ EFI sync successful"
+    else
+        echo "  ✗ EFI sync failed"
+    fi
+else
+    echo "  ✗ EFI sync script not found"
+fi
+echo ""
+
+echo "7. System Information:"
+echo "  Hostname: $(hostname)"
+echo "  Kernel: $(uname -r)"
+echo "  ZFS Version: $(zfs version 2>/dev/null | head -1 || echo "Unknown")"
+echo "  Uptime: $(uptime | cut -d',' -f1)"
+echo ""
+
+echo "8. Drive Failure Simulation Test Commands:"
+echo "  To test drive failure resilience, run these commands as root:"
+echo ""
+echo "  # Simulate drive 1 failure:"
+mapfile -t RPOOL_DEVS < <(zpool status rpool | awk '/\/dev\// {print $1}' | head -2)
+if [[ ${#RPOOL_DEVS[@]} -ge 2 ]]; then
+    echo "  sudo zpool offline rpool ${RPOOL_DEVS[0]}"
+    echo "  # Verify system still works, then bring it back online:"
+    echo "  sudo zpool online rpool ${RPOOL_DEVS[0]}"
+    echo ""
+    echo "  # Simulate drive 2 failure:"
+    echo "  sudo zpool offline rpool ${RPOOL_DEVS[1]}"
+    echo "  sudo zpool online rpool ${RPOOL_DEVS[1]}"
+else
+    echo "  # Could not determine pool devices automatically"
+    echo "  # Use: zpool status rpool"
+    echo "  # Then: sudo zpool offline rpool /dev/DEVICE"
+fi
+echo ""
+
+echo "=== Test Complete ==="
+echo "For recovery information, see: /root/ZFS-RECOVERY-GUIDE.txt"
+TEST_SCRIPT
+
+    chmod +x /mnt/usr/local/bin/test-zfs-mirror
+    log_info "Post-install test script created: /usr/local/bin/test-zfs-mirror"
+}
+
+if ! create_post_install_test; then
+    log_error "Failed to create post-install test script"
+    exit 1
+fi
+
+# Create recovery documentation
+log_info "Creating recovery documentation..."
+create_recovery_guide() {
+    cat << EOF > /mnt/root/ZFS-RECOVERY-GUIDE.txt
+===============================================================================
+ZFS MIRROR RECOVERY GUIDE
+===============================================================================
+Installation Date: $(date)
+Hostname: ${HOSTNAME}
+Drive 1: ${DISK1} (${DISK1_NAME})
+Drive 2: ${DISK2} (${DISK2_NAME})
+Admin User: ${ADMIN_USER}
+
+===============================================================================
+EMERGENCY BOOT PROCEDURES
+===============================================================================
+
+1. POOLS WON'T IMPORT ON BOOT:
+   Boot from Ubuntu Live USB, then:
+
+   sudo zpool import -f -R /mnt rpool
+   sudo zpool import -f -R /mnt bpool
+   sudo mount -t zfs rpool/root /mnt
+   sudo mount -t zfs bpool/boot /mnt/boot
+   sudo mount ${PART1_EFI} /mnt/boot/efi
+
+   # Fix the issue, then:
+   sudo umount -R /mnt
+   sudo zpool export bpool rpool
+
+2. GRUB/EFI BOOT REPAIR:
+   From live system with pools imported:
+
+   sudo mount --bind /dev /mnt/dev
+   sudo mount --bind /proc /mnt/proc
+   sudo mount --bind /sys /mnt/sys
+   sudo chroot /mnt
+
+   grub-install --target=x86_64-efi --efi-directory=/boot/efi
+   update-grub
+   exit
+
+3. SINGLE DRIVE FAILURE REPLACEMENT:
+
+   Drive 1 (${DISK1}) failed:
+   sudo zpool replace rpool ${PART1_ROOT} /dev/NEW-DRIVE-part4
+   sudo zpool replace bpool ${PART1_BOOT} /dev/NEW-DRIVE-part3
+
+   Drive 2 (${DISK2}) failed:
+   sudo zpool replace rpool ${PART2_ROOT} /dev/NEW-DRIVE-part4
+   sudo zpool replace bpool ${PART2_BOOT} /dev/NEW-DRIVE-part3
+
+   After replacement, recreate EFI and swap:
+   sudo mkdosfs -F 32 -s 1 -n "EFI" -i ${EFI_VOLUME_ID} /dev/NEW-DRIVE-part1
+   sudo mkswap /dev/NEW-DRIVE-part2
+   sudo /usr/local/bin/sync-efi-partitions
+
+===============================================================================
+USEFUL COMMANDS
+===============================================================================
+
+Check pool status:        sudo zpool status
+Check dataset usage:      sudo zfs list
+Test system:             sudo /usr/local/bin/test-zfs-mirror
+Sync EFI partitions:     sudo /usr/local/bin/sync-efi-partitions
+Check boot entries:      efibootmgr
+
+Force import (emergency): echo 'ZPOOL_IMPORT_OPTS="-f"' >> /etc/default/zfs
+Remove force flag:        sudo /usr/local/bin/zfs-remove-force-flag
+
+Scrub pools (monthly):    sudo zpool scrub rpool && sudo zpool scrub bpool
+Check scrub progress:     sudo zpool status
+
+===============================================================================
+PARTITION LAYOUT REFERENCE
+===============================================================================
+
+Each drive has 4 partitions:
+  part1: EFI System Partition (512MB, FAT32, UUID=${EFI_VOLUME_ID})
+  part2: Swap (4GB)
+  part3: Boot Pool (2GB, ZFS)
+  part4: Root Pool (Remaining space, ZFS)
+
+Drive 1 partitions:
+  ${PART1_EFI} (EFI)
+  ${PART1_SWAP} (Swap)
+  ${PART1_BOOT} (Boot Pool)
+  ${PART1_ROOT} (Root Pool)
+
+Drive 2 partitions:
+  ${PART2_EFI} (EFI)
+  ${PART2_SWAP} (Swap)
+  ${PART2_BOOT} (Boot Pool)
+  ${PART2_ROOT} (Root Pool)
+
+===============================================================================
+CONTACT AND SUPPORT
+===============================================================================
+
+Original script: ${ORIGINAL_REPO}
+Installation log: ${LOG_FILE}
+
+For ZFS documentation: https://openzfs.github.io/openzfs-docs/
+For Ubuntu ZFS guide: https://ubuntu.com/tutorials/setup-zfs-storage-pool
+
+===============================================================================
+EOF
+
+    chmod 600 /mnt/root/ZFS-RECOVERY-GUIDE.txt
+    log_info "Recovery guide created: /root/ZFS-RECOVERY-GUIDE.txt"
+}
+
+if ! create_recovery_guide; then
+    log_error "Failed to create recovery guide"
+    exit 1
+fi
+
 show_progress 10 10 "Installation complete!"
 
 # Mark installation as completed
@@ -2244,14 +2526,27 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     echo -e "  ✓ Ubuntu's built-in ZFS services (no custom units)"
     echo -e "  ✓ Automatic force flag cleanup after first boot"
     echo -e "  ✓ Both drives fully bootable and synchronized"
+    echo -e "  ✓ Comprehensive test and recovery tools included"
     echo ""
     echo -e "${YELLOW}${BOLD}First Boot:${NC}"
     echo -e "  • Force import flag will be automatically removed"
     echo -e "  • Manual cleanup available: ${GREEN}sudo /usr/local/bin/zfs-remove-force-flag${NC}"
     echo ""
-    echo -e "${BOLD}Test without custom services:${NC}"
-    echo -e "  ${GREEN}sudo systemctl disable zfs-first-boot-cleanup.service${NC}"
-    echo -e "  ${GREEN}sudo systemctl enable zfs-import-cache.service${NC}"
+    echo -e "${YELLOW}${BOLD}Post-Install Recommendations:${NC}"
+    echo -e "${GREEN}1. Test the installation:${NC}"
+    echo -e "   ${GREEN}sudo /usr/local/bin/test-zfs-mirror${NC}"
+    echo ""
+    echo -e "${GREEN}2. Review recovery procedures:${NC}"
+    echo -e "   ${GREEN}sudo cat /root/ZFS-RECOVERY-GUIDE.txt${NC}"
+    echo ""
+    echo -e "${GREEN}3. Test drive failure resilience:${NC}"
+    echo -e "   ${GREEN}# See commands in test script output${NC}"
+    echo ""
+    echo -e "${GREEN}4. Verify EFI sync is working:${NC}"
+    echo -e "   ${GREEN}sudo /usr/local/bin/sync-efi-partitions${NC}"
+    echo ""
+    echo -e "${GREEN}5. Schedule regular maintenance:${NC}"
+    echo -e "   ${GREEN}# Monthly scrubs and weekly trims are pre-configured${NC}"
 else
     echo -e "${YELLOW}System remains mounted at /mnt${NC}"
 fi
