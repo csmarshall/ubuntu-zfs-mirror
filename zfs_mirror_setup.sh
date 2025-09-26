@@ -1302,40 +1302,51 @@ if [[ -z "${EFI_UUID}" ]]; then
     exit 1
 fi
 
-# Find both partitions with this UUID
-mapfile -t EFI_PARTITIONS < <(blkid -U "${EFI_UUID}" 2>/dev/null || true)
+# Get the currently mounted EFI partition (this is our source)
+MOUNTED_EFI=$(mount | grep '/boot/efi' | awk '{print $1}')
+
+if [[ -z "${MOUNTED_EFI}" ]]; then
+    log_message "ERROR: No EFI partition currently mounted at /boot/efi"
+    exit 1
+fi
+
+# Find all partitions with this UUID
+mapfile -t EFI_PARTITIONS < <(blkid --output device --match-token UUID="${EFI_UUID}" 2>/dev/null || true)
 
 if [[ ${#EFI_PARTITIONS[@]} -ne 2 ]]; then
     log_message "ERROR: Expected 2 EFI partitions, found ${#EFI_PARTITIONS[@]}"
     exit 1
 fi
 
-PRIMARY_EFI="${EFI_PARTITIONS[0]}"
-SECONDARY_EFI="${EFI_PARTITIONS[1]}"
+# Find the other partition (the one not currently mounted)
+TARGET_EFI=""
+for partition in "${EFI_PARTITIONS[@]}"; do
+    if [[ "${partition}" != "${MOUNTED_EFI}" ]]; then
+        TARGET_EFI="${partition}"
+        break
+    fi
+done
 
-log_message "Syncing EFI: ${PRIMARY_EFI} -> ${SECONDARY_EFI}"
+if [[ -z "${TARGET_EFI}" ]]; then
+    log_message "ERROR: Could not find unmounted EFI partition"
+    exit 1
+fi
+
+log_message "Syncing EFI: ${MOUNTED_EFI} (mounted) -> ${TARGET_EFI}"
 
 # Mount and sync
-PRIMARY_MOUNT=$(mktemp -d)
-SECONDARY_MOUNT=$(mktemp -d)
+TARGET_MOUNT=$(mktemp -d)
 
-if ! mount "${PRIMARY_EFI}" "${PRIMARY_MOUNT}"; then
-    log_message "ERROR: Failed to mount primary EFI partition"
-    rmdir "${PRIMARY_MOUNT}" "${SECONDARY_MOUNT}"
+if ! mount "${TARGET_EFI}" "${TARGET_MOUNT}"; then
+    log_message "ERROR: Failed to mount target EFI partition"
+    rmdir "${TARGET_MOUNT}"
     exit 1
 fi
 
-if ! mount "${SECONDARY_EFI}" "${SECONDARY_MOUNT}"; then
-    log_message "ERROR: Failed to mount secondary EFI partition"
-    umount "${PRIMARY_MOUNT}"
-    rmdir "${PRIMARY_MOUNT}" "${SECONDARY_MOUNT}"
-    exit 1
-fi
+rsync -av --delete /boot/efi/ "${TARGET_MOUNT}/"
 
-rsync -av --delete "${PRIMARY_MOUNT}/" "${SECONDARY_MOUNT}/"
-
-umount "${PRIMARY_MOUNT}" "${SECONDARY_MOUNT}"
-rmdir "${PRIMARY_MOUNT}" "${SECONDARY_MOUNT}"
+umount "${TARGET_MOUNT}"
+rmdir "${TARGET_MOUNT}"
 
 log_message "EFI sync completed"
 EFI_SYNC_SCRIPT
