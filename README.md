@@ -149,7 +149,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 4.1.1 - Fixed EFI filesystem creation with proper volume IDs
+- **Script Version**: 4.2.1 - Fixed hostid validation timing and synchronization
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

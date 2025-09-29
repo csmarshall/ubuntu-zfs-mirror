@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.2.0 - CRITICAL: Fixed hostid alignment for clean first boot
+# Version: 4.2.1 - BUGFIX: Fixed hostid validation timing
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.2.0"
+readonly VERSION="4.2.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
