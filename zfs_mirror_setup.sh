@@ -1478,6 +1478,14 @@ create_zfs_pools() {
     fi
     
     log_info "Root pool created successfully"
+
+    # Configure pools for bulletproof Ubuntu 24.04 import
+    # Set cachefile=none for both pools to avoid cache file issues
+    log_info "Configuring pools for reliable import..."
+    zpool set cachefile=none bpool
+    zpool set cachefile=none rpool
+    log_info "Pools configured with cachefile=none for scan-based import"
+
     return 0
 }
 
@@ -1891,9 +1899,8 @@ if ! debootstrap noble /mnt; then
     exit 1
 fi
 
-# Copy ZFS cache
+# Create ZFS config directory (cache file not used with cachefile=none)
 mkdir -p /mnt/etc/zfs
-cp /etc/zfs/zpool.cache /mnt/etc/zfs/ 2>/dev/null || true
 
 show_progress 7 10 "Configuring system..."
 
@@ -2172,7 +2179,10 @@ chmod +x /etc/cron.monthly/zfs-scrub
 
 # Enable essential services using Ubuntu's built-in ZFS services
 log_info "Enabling ZFS and system services"
-systemctl enable zfs-import-cache.service
+
+# Ubuntu 24.04 bulletproof configuration: Use scan-based import only
+# This avoids cache file corruption issues and ensures reliable first boot
+systemctl enable zfs-import-scan.service
 systemctl enable zfs-import.target
 systemctl enable zfs-mount.service
 systemctl enable zfs.target
