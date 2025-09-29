@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.1.1 - Fixed EFI filesystem creation with proper volume IDs
+# Version: 4.2.0 - CRITICAL: Fixed hostid alignment for clean first boot
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.1.1"
+readonly VERSION="4.2.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -1148,200 +1148,29 @@ perform_pre_destruction_analysis() {
     return 0
 }
 
-# Create first-boot cleanup system to remove force flag
-setup_first_boot_cleanup() {
+# Create clean ZFS configuration (no force flags needed with hostid alignment)
+setup_zfs_config() {
     local hostid="$1"
-    
+
     if [[ -z "${hostid}" ]]; then
-        log_error "setup_first_boot_cleanup: No hostid provided"
-        return 1
-    fi
-    
-    log_header "Configuring First Boot Cleanup"
-    
-    # Create cleanup script
-    cat << 'CLEANUP_SCRIPT' > /mnt/usr/local/bin/zfs-first-boot-cleanup
-#!/bin/bash
-# ZFS First Boot Cleanup - Removes force import flag after successful first boot
-set -euo pipefail
-
-LOG_TAG="zfs-first-boot-cleanup"
-log_message() {
-    logger -t "$LOG_TAG" "$*" 2>/dev/null || true
-    echo "$(date '+%F %T') [$LOG_TAG] $*"
-}
-
-ZFS_DEFAULTS="/etc/default/zfs"
-CLEANUP_MARKER="/var/lib/zfs-first-boot-complete"
-
-# Better pool health validation
-validate_pool_health() {
-    local pool="$1"
-    local status
-
-    log_message "Validating health of pool: $pool"
-
-    # Check if pool exists and is imported
-    if ! zpool list "$pool" &>/dev/null; then
-        log_message "ERROR: Pool $pool is not imported"
+        log_error "setup_zfs_config: No hostid provided"
         return 1
     fi
 
-    # Get detailed status
-    status=$(zpool status "$pool")
+    log_header "Creating ZFS Configuration"
+    log_info "Hostid alignment eliminates need for force flags and cleanup complexity"
 
-    # Check for critical failures
-    if echo "$status" | grep -q "FAULTED\|UNAVAIL\|REMOVED"; then
-        log_message "ERROR: Pool $pool has critical failures"
-        return 1
-    fi
-
-    # Allow DEGRADED but warn (single drive failure in mirror is recoverable)
-    if echo "$status" | grep -q "DEGRADED"; then
-        log_message "WARNING: Pool $pool is DEGRADED but functional"
-    fi
-
-    # Ensure pool is ONLINE or DEGRADED (both are functional)
-    if echo "$status" | grep -q "state: ONLINE\|state: DEGRADED"; then
-        log_message "Pool $pool validation successful"
-        return 0
-    fi
-
-    log_message "ERROR: Pool $pool is in unexpected state"
-    return 1
-}
-
-# Safer config file handling
-update_zfs_config() {
-    local config_file="$1"
-    local backup_file="${config_file}.pre-cleanup.$(date +%Y%m%d-%H%M%S)"
-
-    log_message "Updating ZFS configuration"
-
-    # Create timestamped backup
-    if ! cp "$config_file" "$backup_file"; then
-        log_message "ERROR: Failed to backup ZFS config"
-        return 1
-    fi
-
-    # Remove only the force-related lines, preserve everything else
-    sed -i '/^ZPOOL_IMPORT_OPTS.*-f/d' "$config_file"
-    sed -i '/^FIRST_BOOT_FORCE=/d' "$config_file"
-
-    log_message "Updated ZFS config, backup at: $backup_file"
-    return 0
-}
-
-# Check if cleanup already completed
-if [[ -f "$CLEANUP_MARKER" ]]; then
-    log_message "First boot cleanup already completed, exiting"
-    exit 0
-fi
-
-log_message "Starting ZFS first boot cleanup"
-
-# Verify ZFS config file exists
-if [[ ! -f "$ZFS_DEFAULTS" ]]; then
-    log_message "ERROR: ZFS defaults file not found: $ZFS_DEFAULTS"
-    exit 1
-fi
-
-# Validate both pools are healthy
-if ! validate_pool_health "rpool" || ! validate_pool_health "bpool"; then
-    log_message "Pool validation failed, will retry on next boot"
-    exit 1  # Service remains enabled for retry
-fi
-
-log_message "All pools validated successfully, proceeding with cleanup"
-
-# Update configuration safely
-if ! update_zfs_config "$ZFS_DEFAULTS"; then
-    log_message "Failed to update ZFS configuration, will retry on next boot"
-    exit 1
-fi
-
-# Create completion marker
-if ! touch "$CLEANUP_MARKER"; then
-    log_message "ERROR: Failed to create completion marker"
-    exit 1
-fi
-chmod 644 "$CLEANUP_MARKER"
-
-# Only disable service after successful cleanup
-if ! systemctl disable zfs-first-boot-cleanup.service 2>/dev/null; then
-    log_message "WARNING: Failed to disable cleanup service, but cleanup completed"
-fi
-
-log_message "First boot cleanup completed successfully"
-CLEANUP_SCRIPT
-
-    chmod +x /mnt/usr/local/bin/zfs-first-boot-cleanup
-    
-    # Create systemd service
-    cat << 'CLEANUP_SERVICE' > /mnt/etc/systemd/system/zfs-first-boot-cleanup.service
-[Unit]
-Description=ZFS First Boot Cleanup
-After=zfs.target multi-user.target
-Wants=zfs.target
-Requires=zfs.target
-ConditionPathExists=!/var/lib/zfs-first-boot-complete
-ConditionPathExists=/etc/default/zfs
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/bin/zfs-first-boot-cleanup
-TimeoutStartSec=300
-Restart=no
-
-[Install]
-WantedBy=multi-user.target
-CLEANUP_SERVICE
-
-    # Enable the service
-    if ! chroot /mnt systemctl enable zfs-first-boot-cleanup.service; then
-        log_error "Failed to enable first-boot cleanup service"
-        return 1
-    fi
-    
-    # Create ZFS defaults with force flag for first boot
+    # Create ZFS defaults with proper hostid (no force flag needed)
     cat > /mnt/etc/default/zfs << ZFS_DEFAULTS_EOF
 # ZFS Configuration for Ubuntu ZFS Mirror Installation
+# Hostid synchronized between installer and target system for clean import
 HOSTID=${hostid}
 
-# First boot configuration - force flag will be automatically removed
-ZPOOL_IMPORT_OPTS="-f"
-FIRST_BOOT_FORCE=yes
+# Clean import guaranteed by hostid alignment - no force flags needed
 ZFS_DEFAULTS_EOF
 
-    # Create manual cleanup helper
-    cat << 'MANUAL_CLEANUP' > /mnt/usr/local/bin/zfs-remove-force-flag
-#!/bin/bash
-# Manual ZFS Force Flag Removal
-set -euo pipefail
-
-echo "Current ZFS status:"
-zpool status
-echo ""
-
-read -p "Remove force flag? (y/N): " -r
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    exit 0
-fi
-
-cp /etc/default/zfs /etc/default/zfs.backup.$(date +%Y%m%d-%H%M%S)
-sed -i '/^ZPOOL_IMPORT_OPTS=/d' /etc/default/zfs
-sed -i '/^FIRST_BOOT_FORCE=/d' /etc/default/zfs
-touch /var/lib/zfs-first-boot-complete
-
-echo "Force flag removed manually"
-MANUAL_CLEANUP
-
-    chmod +x /mnt/usr/local/bin/zfs-remove-force-flag
-    
-    log_info "First boot cleanup configured:"
-    log_info "  • Force flag will be removed after successful first boot"
-    log_info "  • Manual tool: /usr/local/bin/zfs-remove-force-flag"
+    log_info "ZFS configuration created with hostid: ${hostid}"
+    log_info "Pools will import cleanly on first boot without any manual intervention"
     return 0
 }
 
@@ -1859,8 +1688,61 @@ perform_basic_zfs_cleanup "bpool" "${PART1_BOOT}" "${PART2_BOOT}"
 
 show_progress 4 10 "Creating root pool..."
 
-# Cleanup before root pool creation  
+# Cleanup before root pool creation
 perform_basic_zfs_cleanup "rpool" "${PART1_ROOT}" "${PART2_ROOT}"
+
+# ============================================================================
+# CRITICAL: Generate and synchronize ZFS hostid across installer and target
+# ============================================================================
+#
+# This is the most important step for preventing "pool was previously in use
+# from another system" errors on first boot. The problem occurs when:
+#
+# 1. ZFS pools are created with installer USB hostid (random/unknown)
+# 2. Target system boots with different hostid (also random)
+# 3. ZFS refuses to import pools due to hostid mismatch
+# 4. Manual force import required: "zpool import -f rpool"
+#
+# Our solution ensures perfect hostid alignment:
+# 1. Generate unique hostid for this installation
+# 2. Set it in installer environment (for pool creation)
+# 3. Copy same hostid to target system (for pool import)
+# 4. Pools and system use identical hostid = clean import
+#
+log_header "Configuring ZFS hostid for clean first boot"
+log_info "Generating unique hostid and synchronizing across installer and target system"
+log_info "This eliminates 'pool was previously in use from another system' errors"
+
+# Show current state before changes
+ORIGINAL_HOSTID=$(hostid 2>/dev/null || echo "none")
+log_info "Original installer hostid: ${ORIGINAL_HOSTID}"
+
+# Generate new hostid for this installation
+log_info "Generating new hostid for this ZFS installation..."
+zgenhostid -f
+HOSTID=$(hostid)
+log_info "Generated new hostid: ${HOSTID}"
+
+# Ensure target system directory exists
+mkdir -p /mnt/etc
+
+# Copy hostid to target system so it matches exactly
+log_info "Synchronizing hostid to target system..."
+cp /etc/hostid /mnt/etc/hostid
+
+# Verify synchronization worked
+TARGET_HOSTID=$(chroot /mnt hostid 2>/dev/null || echo "failed")
+if [[ "${HOSTID}" == "${TARGET_HOSTID}" ]]; then
+    log_info "✓ Hostid synchronization successful"
+    log_info "  Installer hostid: ${HOSTID}"
+    log_info "  Target hostid:    ${TARGET_HOSTID}"
+    log_info "✓ ZFS pools will import cleanly on first boot (no force flag needed)"
+else
+    log_error "Hostid synchronization failed!"
+    log_error "  Installer hostid: ${HOSTID}"
+    log_error "  Target hostid:    ${TARGET_HOSTID}"
+    exit 1
+fi
 
 # Create ZFS pools with consolidated logic
 if ! create_zfs_pools "${PART1_BOOT}" "${PART2_BOOT}" "${PART1_ROOT}" "${PART2_ROOT}" "${ASHIFT}" "${TRIM_ENABLED}"; then
@@ -1870,7 +1752,35 @@ fi
 
 POOLS_CREATED="yes"
 
-log_info "ZFS pools created successfully!"
+# ============================================================================
+# CRITICAL: Verify pools were created with correct hostid
+# ============================================================================
+log_info "Verifying ZFS pools were created with correct hostid..."
+
+# Check rpool hostid
+RPOOL_HOSTID=$(zdb -C rpool | grep -E '^\s*hostid:' | awk '{print $2}' 2>/dev/null || echo "unknown")
+BPOOL_HOSTID=$(zdb -C bpool | grep -E '^\s*hostid:' | awk '{print $2}' 2>/dev/null || echo "unknown")
+
+# Convert our hostid to the same format for comparison (hex without 0x prefix)
+EXPECTED_HOSTID_HEX=$(printf "%x" "0x${HOSTID}")
+
+log_info "Hostid verification results:"
+log_info "  Expected hostid: ${HOSTID} (0x${EXPECTED_HOSTID_HEX})"
+log_info "  rpool hostid:    ${RPOOL_HOSTID}"
+log_info "  bpool hostid:    ${BPOOL_HOSTID}"
+
+# Verify both pools have correct hostid
+if [[ "${RPOOL_HOSTID}" == "${EXPECTED_HOSTID_HEX}" && "${BPOOL_HOSTID}" == "${EXPECTED_HOSTID_HEX}" ]]; then
+    log_info "✓ Pool hostid verification PASSED"
+    log_info "✓ Both pools created with correct hostid - first boot will be clean"
+else
+    log_error "✗ Pool hostid verification FAILED!"
+    log_error "  This will cause 'pool was previously in use from another system' errors"
+    log_error "  Expected: ${EXPECTED_HOSTID_HEX}, got rpool: ${RPOOL_HOSTID}, bpool: ${BPOOL_HOSTID}"
+    exit 1
+fi
+
+log_info "ZFS pools created successfully with verified hostid alignment!"
 echo ""
 log_info "Current pool status:"
 zpool list
@@ -2106,10 +2016,8 @@ net.ipv4.tcp_fastopen=3
 SYSCTL_EOF
 fi
 
-# Generate consistent hostid for ZFS
-log_info "Generating consistent hostid for ZFS"
-zgenhostid -f
-HOSTID=$(hostid)
+# Hostid already generated and synchronized earlier in the process
+log_info "Using previously generated hostid for ZFS: ${HOSTID}"
 
 # Configure GRUB with console and AppArmor settings
 if [[ "${USE_SERIAL_CONSOLE:-false}" == "true" ]]; then
@@ -2240,8 +2148,8 @@ if [[ -z "${HOSTID}" ]]; then
     exit 1
 fi
 
-if ! setup_first_boot_cleanup "${HOSTID}"; then
-    log_error "Failed to setup first-boot cleanup"
+if ! setup_zfs_config "${HOSTID}"; then
+    log_error "Failed to setup ZFS configuration"
     exit 1
 fi
 
@@ -2420,8 +2328,7 @@ Test system:             sudo /usr/local/bin/test-zfs-mirror
 Sync EFI partitions:     sudo /usr/local/bin/sync-efi-partitions
 Check boot entries:      efibootmgr
 
-Force import (emergency): echo 'ZPOOL_IMPORT_OPTS="-f"' >> /etc/default/zfs
-Remove force flag:        sudo /usr/local/bin/zfs-remove-force-flag
+Force import (emergency): sudo zpool import -f rpool && sudo zpool import -f bpool
 
 Scrub pools (monthly):    sudo zpool scrub rpool && sudo zpool scrub bpool
 Check scrub progress:     sudo zpool status
@@ -2534,7 +2441,7 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     echo -e "${GREEN}${BOLD}Key Features:${NC}"
     echo -e "  ✓ True EFI redundancy with UUID-based mounting"
     echo -e "  ✓ Ubuntu's built-in ZFS services (no custom units)"
-    echo -e "  ✓ Automatic force flag cleanup after first boot"
+    echo -e "  ✓ Clean pool import via hostid alignment (no force flags)"
     echo -e "  ✓ Both drives fully bootable and synchronized"
     echo -e "  ✓ Comprehensive test and recovery tools included"
     echo ""

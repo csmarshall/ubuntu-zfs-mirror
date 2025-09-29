@@ -17,6 +17,7 @@ Based on git commit analysis of the script evolution.
 | Sep 24, 2025 | f89cafe | Enhancement | +48, -34 | Moderate improvement |
 | Sep 26, 2025 | a791119 | Bugfix | +31, -20 | "Fixed sync script" |
 | Sep 26, 2025 | cefe2ae | Major Feature | +320, -25 | "Additional care and support" |
+| Sep 29, 2025 | TBD | **Critical Fix** | TBD | v4.2.0 - Hostid synchronization implementation |
 
 ## Major Phases
 
@@ -44,6 +45,13 @@ Based on git commit analysis of the script evolution.
 - **f89cafe**: 48 additions, 34 removals - code improvements
 - **a791119**: "Fixed sync script" - 31 additions, 20 removals
 - **cefe2ae**: "Additional care and support" - 320 additions, 25 removals
+
+### Phase 6: Critical Hostid Fix (Sep 29)
+- **v4.2.0**: **CRITICAL BUG FIX** - Hostid synchronization implementation
+- **Problem**: "pool was previously in use from another system" errors on first boot
+- **Root cause**: Pools created with installer hostid, system boots with different hostid
+- **Solution**: Generate hostid before pool creation, synchronize to target system
+- **Impact**: Eliminates need for force flags and first-boot cleanup complexity
 
 ## Key Observations
 

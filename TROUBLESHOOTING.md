@@ -7,22 +7,24 @@
 ### First Boot Import Issues
 
 **Symptoms:**
-- `bpool` not importing at first boot
-- `zfs-first-boot-cleanup.service` failing
-- Manual force import required
+- `pool was previously in use from another system` errors
+- Manual force import required: `zpool import -f rpool`
+- Clean import failures on first boot
 
 **Root Cause:**
-Ubuntu 24.04 has reliability issues with ZFS cache files, and the original script configuration was inconsistent between pools.
+Hostid mismatch between installer environment and target system. ZFS pools are created with installer USB hostid but target system boots with different hostid.
 
-**Solution (Implemented):**
-- Both pools now use `cachefile=none`
-- Only `zfs-import-scan.service` enabled (no cache service)
-- Eliminates cache file corruption issues
+**Solution (Implemented v4.2.0):**
+- **Hostid synchronization:** Generate unique hostid before pool creation
+- **Perfect alignment:** Same hostid used by installer and target system
+- **Pre-boot verification:** Validate pools have correct hostid before reboot
+- **Clean imports:** No force flags or cleanup complexity needed
 
 **Technical Details:**
-- **Before:** Mixed cache/scan approach with missing scan service
-- **After:** Bulletproof scan-only import for both pools
-- **Trade-off:** Slightly slower boot, much more reliable
+- **Before:** Pools created with random installer hostid, complex cleanup system needed
+- **After:** Hostid generated and synchronized, pools import cleanly
+- **Legacy approach:** First-boot cleanup system (removed in v4.2.0)
+- **New approach:** Bulletproof hostid alignment eliminates all force flag requirements
 
 ### Quick Fixes
 
@@ -33,16 +35,19 @@ zpool import -f rpool
 exit
 ```
 
-**Manual Cleanup After Boot Issues:**
+**Manual Pool Import (if needed):**
 ```bash
-# Remove force flag manually
-sudo /usr/local/bin/zfs-remove-force-flag
+# Import pools manually (emergency only)
+sudo zpool import -f rpool
+sudo zpool import -f bpool
 
 # Check pool status
 zpool status
 
-# Import missing pool
-sudo zpool import -f bpool
+# Check hostid alignment
+hostid
+zdb -C rpool | grep hostid
+zdb -C bpool | grep hostid
 ```
 
 ## Script Configuration Details
@@ -51,22 +56,26 @@ sudo zpool import -f bpool
 - Both `rpool` and `bpool` use `cachefile=none`
 - `zfs-import-scan.service` handles all imports
 - No cache file dependencies
+- **Hostid synchronization** ensures clean import without force flags
 
-### First Boot Cleanup
-- Automatic removal of force flags after successful boot
-- Validates both pools are healthy before cleanup
-- Manual cleanup tool available: `/usr/local/bin/zfs-remove-force-flag`
+### Hostid Management (v4.2.0+)
+- Unique hostid generated during installation
+- Synchronized across installer and target system
+- Pre-boot verification confirms pool alignment
+- No cleanup services or force flags required
 
 ## Development Notes
 
 ### Recent Changes
+- **2025-09-29:** v4.2.0 - Implemented hostid synchronization for clean imports
 - **2025-09-26:** Fixed first boot import reliability by switching to cachefile=none for both pools
 
 ### Testing Checklist
-- [ ] Both pools import at first boot
+- [ ] Hostid generated before pool creation
+- [ ] Pools created with correct hostid (verified by zdb -C)
+- [ ] Target system configured with same hostid
+- [ ] Both pools import cleanly at first boot
 - [ ] No force import required
-- [ ] First boot cleanup service succeeds
-- [ ] Manual cleanup tool works
 
 ### Future Improvements
 - Monitor Ubuntu ZFS service changes
