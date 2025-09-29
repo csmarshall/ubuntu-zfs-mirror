@@ -17,7 +17,8 @@ Based on git commit analysis of the script evolution.
 | Sep 24, 2025 | f89cafe | Enhancement | +48, -34 | Moderate improvement |
 | Sep 26, 2025 | a791119 | Bugfix | +31, -20 | "Fixed sync script" |
 | Sep 26, 2025 | cefe2ae | Major Feature | +320, -25 | "Additional care and support" |
-| Sep 29, 2025 | TBD | **Critical Fix** | TBD | v4.2.0 - Hostid synchronization implementation |
+| Sep 29, 2025 | 714811d | **Critical Fix** | Major | v4.2.0 - Hostid synchronization implementation |
+| Sep 29, 2025 | Current | **Bugfix** | +17, -13 | v4.2.1 - Fixed hostid validation timing |
 
 ## Major Phases
 
@@ -48,6 +49,10 @@ Based on git commit analysis of the script evolution.
 
 ### Phase 6: Critical Hostid Fix (Sep 29)
 - **v4.2.0**: **CRITICAL BUG FIX** - Hostid synchronization implementation
+- **v4.2.1**: **VALIDATION FIX** - Fixed premature hostid validation timing
+  - Moved chroot validation from before pool creation to after base system install
+  - Added dual validation: early file check + final comprehensive validation
+  - Resolves "Hostid synchronization failed!" error during installation
 - **Problem**: "pool was previously in use from another system" errors on first boot
 - **Root cause**: Pools created with installer hostid, system boots with different hostid
 - **Solution**: Generate hostid before pool creation, synchronize to target system

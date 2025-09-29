@@ -67,15 +67,59 @@ zdb -C bpool | grep hostid
 ## Development Notes
 
 ### Recent Changes
+- **2025-09-29:** v4.2.1 - Fixed hostid validation timing (validation moved to after base system install)
 - **2025-09-29:** v4.2.0 - Implemented hostid synchronization for clean imports
 - **2025-09-26:** Fixed first boot import reliability by switching to cachefile=none for both pools
 
 ### Testing Checklist
 - [ ] Hostid generated before pool creation
-- [ ] Pools created with correct hostid (verified by zdb -C)
-- [ ] Target system configured with same hostid
+- [ ] Hostid file copied to target system (early validation)
+- [ ] Pools created with correct hostid
+- [ ] Base system installed successfully
+- [ ] Final validation: target system hostid matches pool hostid (verified by zdb -C)
 - [ ] Both pools import cleanly at first boot
 - [ ] No force import required
+
+### Documentation Requirements
+
+When making **ANY** changes to code files, you **MUST** update the corresponding documentation:
+
+**Required Updates for ALL Code Changes:**
+
+1. **CHANGELOG.md** - Add entry with:
+   - Date and version increment
+   - Brief description of changes
+   - Line count changes (+X, -Y)
+   - Classification (Bugfix, Feature, Enhancement, etc.)
+
+2. **TROUBLESHOOTING.md** - Update if the change:
+   - Fixes a known issue
+   - Changes validation logic
+   - Modifies error handling
+   - Affects installation flow
+
+3. **README.md** - Update if the change:
+   - Affects usage instructions
+   - Changes requirements
+   - Modifies command line options
+   - Updates system compatibility
+
+**Version Numbering:** Use semantic versioning (Major.Minor.Patch)
+- Current version: **4.2.1** (as of 2025-09-29)
+
+### AI Assistant Guidelines
+
+**Workflow for AI Assistants:**
+1. **Before making changes**: Read existing documentation to understand context
+2. **While making changes**: Note what documentation needs updating
+3. **After making changes**: Update ALL relevant documentation files
+4. **Never skip documentation**: Even small fixes require changelog entries
+
+**Quality Standards:**
+- Test thoroughly (changes affect bootability and data integrity)
+- Document everything (users depend on accurate troubleshooting info)
+- Follow existing patterns and code style
+- Validate logic (ZFS operations have complex interdependencies)
 
 ### Future Improvements
 - Monitor Ubuntu ZFS service changes

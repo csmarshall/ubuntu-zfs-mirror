@@ -1730,17 +1730,13 @@ mkdir -p /mnt/etc
 log_info "Synchronizing hostid to target system..."
 cp /etc/hostid /mnt/etc/hostid
 
-# Verify synchronization worked
-TARGET_HOSTID=$(chroot /mnt hostid 2>/dev/null || echo "failed")
-if [[ "${HOSTID}" == "${TARGET_HOSTID}" ]]; then
-    log_info "✓ Hostid synchronization successful"
+# Verify file copy worked (chroot validation moved to after base system install)
+if [[ -f "/mnt/etc/hostid" ]]; then
+    log_info "✓ Hostid file copied to target system"
     log_info "  Installer hostid: ${HOSTID}"
-    log_info "  Target hostid:    ${TARGET_HOSTID}"
     log_info "✓ ZFS pools will import cleanly on first boot (no force flag needed)"
 else
-    log_error "Hostid synchronization failed!"
-    log_error "  Installer hostid: ${HOSTID}"
-    log_error "  Target hostid:    ${TARGET_HOSTID}"
+    log_error "Failed to copy hostid file to target system!"
     exit 1
 fi
 
@@ -2374,6 +2370,24 @@ EOF
 
 if ! create_recovery_guide; then
     log_error "Failed to create recovery guide"
+    exit 1
+fi
+
+# Final validation: verify target system hostid matches ZFS pool hostid
+log_info "Performing final hostid validation..."
+TARGET_HOSTID=$(chroot /mnt hostid 2>/dev/null || echo "failed")
+POOL_HOSTID=$(zdb -C rpool | grep 'hostid=' | cut -d'=' -f2 | tr -d "'" 2>/dev/null || echo "failed")
+
+if [[ "${TARGET_HOSTID}" == "${POOL_HOSTID}" && "${TARGET_HOSTID}" != "failed" && "${TARGET_HOSTID}" != "" ]]; then
+    log_info "✓ Final hostid validation successful"
+    log_info "  Target system hostid: ${TARGET_HOSTID}"
+    log_info "  ZFS pool hostid:      ${POOL_HOSTID}"
+    log_info "✓ Pools will import cleanly on first boot"
+else
+    log_error "Final hostid validation failed!"
+    log_error "  Target system hostid: ${TARGET_HOSTID}"
+    log_error "  ZFS pool hostid:      ${POOL_HOSTID}"
+    log_error "This may cause 'pool was previously in use from another system' errors"
     exit 1
 fi
 
