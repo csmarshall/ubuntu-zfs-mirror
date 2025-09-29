@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.2.3 - ENHANCEMENT: Dual hostid validation with DRY refactoring
+# Version: 4.2.4 - BUGFIX: Fixed zdb hostid validation for active pools
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.2.3"
+readonly VERSION="4.2.4"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -229,17 +229,27 @@ validate_pool_hostid() {
 
     log_info "Performing hostid validation ${context}..."
 
-    # Check rpool hostid using multiple methods for reliability
-    local rpool_hostid=$(zdb -C rpool 2>/dev/null | grep -E '(hostid[:=]|hostid\s+)' | head -1 | sed -E 's/.*hostid[:=]\s*([0-9a-fA-F]+).*/\1/' | tr -d "'\"" || echo "unknown")
-    local bpool_hostid=$(zdb -C bpool 2>/dev/null | grep -E '(hostid[:=]|hostid\s+)' | head -1 | sed -E 's/.*hostid[:=]\s*([0-9a-fA-F]+).*/\1/' | tr -d "'\"" || echo "unknown")
+    # Read hostid directly from device labels (works with active pools)
+    local rpool_hostid_decimal=$(zdb -l "${PART1_ROOT}" 2>/dev/null | grep -E '^\s*hostid:' | head -1 | awk '{print $2}' || echo "unknown")
+    local bpool_hostid_decimal=$(zdb -l "${PART1_BOOT}" 2>/dev/null | grep -E '^\s*hostid:' | head -1 | awk '{print $2}' || echo "unknown")
 
-    # Convert our hostid to the same format for comparison (hex without 0x prefix)
+    # Convert decimal hostids to hex for comparison
+    local rpool_hostid="unknown"
+    local bpool_hostid="unknown"
+    if [[ "${rpool_hostid_decimal}" != "unknown" && "${rpool_hostid_decimal}" =~ ^[0-9]+$ ]]; then
+        rpool_hostid=$(printf "%x" "${rpool_hostid_decimal}")
+    fi
+    if [[ "${bpool_hostid_decimal}" != "unknown" && "${bpool_hostid_decimal}" =~ ^[0-9]+$ ]]; then
+        bpool_hostid=$(printf "%x" "${bpool_hostid_decimal}")
+    fi
+
+    # Convert our expected hostid to hex without 0x prefix
     local expected_hostid_hex=$(printf "%x" "0x${expected_hostid}")
 
     log_info "Hostid validation results:"
     log_info "  Expected hostid: ${expected_hostid} (0x${expected_hostid_hex})"
-    log_info "  rpool hostid:    ${rpool_hostid}"
-    log_info "  bpool hostid:    ${bpool_hostid}"
+    log_info "  rpool hostid:    ${rpool_hostid} (decimal: ${rpool_hostid_decimal})"
+    log_info "  bpool hostid:    ${bpool_hostid} (decimal: ${bpool_hostid_decimal})"
 
     # Verify both pools have correct hostid
     if [[ "${rpool_hostid}" == "${expected_hostid_hex}" && "${bpool_hostid}" == "${expected_hostid_hex}" ]]; then
@@ -254,7 +264,8 @@ validate_pool_hostid() {
         # Debug info to help troubleshoot
         log_error "Debug info:"
         zpool status 2>/dev/null || log_error "  No pools found"
-        zdb -C rpool 2>/dev/null | head -10 || log_error "  Cannot access rpool config"
+        log_error "  rpool device: ${PART1_ROOT}"
+        log_error "  bpool device: ${PART1_BOOT}"
 
         return 1
     fi

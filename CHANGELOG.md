@@ -21,6 +21,7 @@ Based on git commit analysis of the script evolution.
 | Sep 29, 2025 | 54e535a | **Bugfix** | +17, -13 | v4.2.1 - Fixed hostid validation timing |
 | Sep 29, 2025 | 9243e12 | **Bugfix** | +18, -13 | v4.2.2 - Fixed hostid mountpoint conflict |
 | Sep 29, 2025 | 20ddb26 | **Enhancement** | +35, -25 | v4.2.3 - Dual hostid validation with DRY refactoring |
+| Sep 29, 2025 | Working | **Bugfix** | +15, -8 | v4.2.4 - Fixed zdb hostid validation for active pools |
 
 ## Major Phases
 
@@ -64,6 +65,11 @@ Based on git commit analysis of the script evolution.
   - Early validation: before base system install (fast failure, save time)
   - Final validation: at installation completion (comprehensive verification)
   - Unified error handling and debug output for consistent troubleshooting
+- **v4.2.4**: **ZDB FIX** - Fixed hostid validation for active/imported pools
+  - Replaced `zdb -C poolname` (fails on active pools) with `zdb -l device` (works always)
+  - Added decimal-to-hex conversion for hostid comparison (ZFS stores as decimal)
+  - Enhanced debug output showing both decimal and hex hostid formats
+  - Resolves "zdb: can't open 'rpool': No such file or directory" validation errors
 - **Problem**: "pool was previously in use from another system" errors on first boot
 - **Root cause**: Pools created with installer hostid, system boots with different hostid
 - **Solution**: Generate hostid before pool creation, synchronize to target system
