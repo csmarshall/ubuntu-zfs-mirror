@@ -2042,6 +2042,7 @@ SYSCTL_EOF
 fi
 
 # Hostid already generated and synchronized earlier in the process
+HOSTID=$(hostid)
 log_info "Using previously generated hostid for ZFS: ${HOSTID}"
 
 # Configure GRUB with console and AppArmor settings
