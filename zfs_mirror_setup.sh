@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.2.5 - BUGFIX: Fixed hostid hex formatting with leading zeros
+# Version: 4.2.6 - BUGFIX: Fixed chroot hostid reading to use synchronized file instead of hostid command
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -2042,7 +2042,12 @@ SYSCTL_EOF
 fi
 
 # Hostid already generated and synchronized earlier in the process
-HOSTID=$(hostid)
+# Read from the synchronized hostid file instead of hostid command (we're in chroot)
+HOSTID=$(printf "%08x" "$(hexdump -e '1/4 "%u"' /etc/hostid)" 2>/dev/null || echo "failed")
+if [[ "${HOSTID}" == "failed" ]]; then
+    log_error "Failed to read synchronized hostid from /etc/hostid"
+    exit 1
+fi
 log_info "Using previously generated hostid for ZFS: ${HOSTID}"
 
 # Configure GRUB with console and AppArmor settings
@@ -2404,7 +2409,13 @@ if ! create_recovery_guide; then
 fi
 
 # Final validation: verify target system hostid matches ZFS pool hostid
-TARGET_HOSTID=$(chroot /mnt hostid 2>/dev/null || echo "failed")
+# Read hostid directly from file (more reliable than chroot hostid command)
+if [[ -f "/mnt/etc/hostid" ]]; then
+    TARGET_HOSTID=$(printf "%08x" "$(hexdump -e '1/4 "%u"' /mnt/etc/hostid)" 2>/dev/null || echo "failed")
+else
+    TARGET_HOSTID="failed"
+fi
+
 if ! validate_pool_hostid "at completion" "${TARGET_HOSTID}"; then
     log_error "Final hostid validation failed - installation may have issues on first boot"
     log_error "Target system hostid: ${TARGET_HOSTID}"

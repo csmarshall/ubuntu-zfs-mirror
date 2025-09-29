@@ -205,7 +205,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 4.2.5 - Fixed hostid hex formatting with leading zeros
+- **Script Version**: 4.2.6 - Fixed chroot hostid reading to use synchronized file
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

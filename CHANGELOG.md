@@ -21,8 +21,11 @@ Based on git commit analysis of the script evolution.
 | Sep 29, 2025 | 54e535a | **Bugfix** | +17, -13 | v4.2.1 - Fixed hostid validation timing |
 | Sep 29, 2025 | 9243e12 | **Bugfix** | +18, -13 | v4.2.2 - Fixed hostid mountpoint conflict |
 | Sep 29, 2025 | 20ddb26 | **Enhancement** | +35, -25 | v4.2.3 - Dual hostid validation with DRY refactoring |
-| Sep 29, 2025 | Working | **Bugfix** | +15, -8 | v4.2.4 - Fixed zdb hostid validation for active pools |
-| Sep 29, 2025 | Working | **Bugfix** | +3, -3 | v4.2.5 - Fixed hostid hex formatting with leading zeros |
+| Sep 29, 2025 | 0f1de0a | **Refactor** | +62, -52 | Standardize pool hostid validation |
+| Sep 29, 2025 | 13a2886 | **Bugfix** | +15, -8 | v4.2.4 - Fixed zdb hostid validation for active pools |
+| Sep 29, 2025 | 9dd6428 | **Bugfix** | +1, -0 | hostid var fix |
+| Sep 29, 2025 | 15359f8 | **Bugfix** | +3, -3 | v4.2.5 - Fixed hostid hex formatting with leading zeros |
+| Sep 29, 2025 | Working | **Critical Fix** | +6, -2 | v4.2.6 - Fixed chroot hostid reading to use synchronized file |
 
 ## Major Phases
 
@@ -76,6 +79,11 @@ Based on git commit analysis of the script evolution.
   - Resolves false validation failures when hostid has leading zeros (e.g., 000c4634)
   - Ensures proper comparison between pool hostid and target system hostid
   - Fixes "Expected: 79a07734, got rpool: c4634" type validation errors
+- **v4.2.6**: **CRITICAL HOSTID BUG** - Fixed chroot hostid reading to use synchronized file instead of hostid command
+  - Root cause: Line 2045 called `hostid` in chroot context, returning installer hostid instead of target system hostid
+  - Fixed by reading from `/etc/hostid` file directly using hexdump instead of hostid command
+  - This was the actual cause of "pool was previously in use from another system" errors on first boot
+  - Target system ZFS config now uses correct synchronized hostid, enabling clean imports without force flags
 - **Problem**: "pool was previously in use from another system" errors on first boot
 - **Root cause**: Pools created with installer hostid, system boots with different hostid
 - **Solution**: Generate hostid before pool creation, synchronize to target system
