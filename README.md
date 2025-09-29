@@ -68,6 +68,62 @@ sudo ./zfs_mirror_setup.sh --prepare hostname /dev/disk/by-id/drive1 /dev/disk/b
 - **Service Configuration**: Bulletproof ZFS import services
 - **Recovery Tools**: Manual cleanup utilities included
 
+## Installation Flow
+
+The script follows a carefully orchestrated sequence to ensure reliable ZFS root installation:
+
+```mermaid
+flowchart TD
+    A[Start Installation] --> B[Validate Drives & Environment]
+    B --> C{--prepare flag?}
+    C -->|Yes| D[Wipe Drives Completely]
+    C -->|No| E[Skip Drive Wipe]
+    D --> F[Partition Drives]
+    E --> F
+
+    F --> G[Install Required Packages]
+    G --> H[Generate Unique Hostid]
+    H --> I[Create ZFS Pools]
+
+    I --> J[Boot Pool Creation]
+    J --> K[Root Pool Creation]
+    K --> L[Verify Empty /mnt for Altroot]
+    L --> M[Pools Mount to /mnt]
+
+    M --> N[Synchronize Hostid to Target]
+    N --> O[Copy /etc/hostid → /mnt/etc/hostid]
+    O --> P[Verify Pool Hostid Alignment]
+
+    P --> Q[Create ZFS Datasets]
+    Q --> R[Install Ubuntu Base System]
+    R --> S[Configure Target System]
+
+    S --> T[Setup Network & Users]
+    T --> U[Install & Configure GRUB]
+    U --> V[Generate Initramfs]
+
+    V --> W[Final Hostid Validation]
+    W --> X{Hostid Match?}
+    X -->|No| Y[❌ FAIL: Hostid Mismatch]
+    X -->|Yes| Z[✅ Installation Complete]
+
+    style H fill:#e1f5fe
+    style N fill:#e8f5e8
+    style O fill:#e8f5e8
+    style P fill:#e8f5e8
+    style W fill:#fff3e0
+    style Z fill:#e8f5e8
+    style Y fill:#ffebee
+```
+
+### Critical Validation Points
+
+1. **Pre-Pool Hostid Generation** (Step H): Creates unique random hostid for this installation
+2. **Post-Pool Hostid Sync** (Steps N-P): Ensures target system matches pool hostid
+3. **Final Validation** (Step W): Confirms target system and pools have identical hostids
+
+This sequence prevents "pool was previously in use from another system" errors by ensuring perfect hostid alignment.
+
 ## Post-Installation
 
 ### Verification Commands
@@ -149,7 +205,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 4.2.1 - Fixed hostid validation timing and synchronization
+- **Script Version**: 4.2.2 - Fixed hostid mountpoint conflict during pool creation
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

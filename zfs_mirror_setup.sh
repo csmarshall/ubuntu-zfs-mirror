@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.2.1 - BUGFIX: Fixed hostid validation timing
+# Version: 4.2.2 - BUGFIX: Fixed hostid mountpoint conflict
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.2.1"
+readonly VERSION="4.2.2"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -1723,14 +1723,28 @@ zgenhostid -f
 HOSTID=$(hostid)
 log_info "Generated new hostid: ${HOSTID}"
 
-# Ensure target system directory exists
-mkdir -p /mnt/etc
+# Create ZFS pools with consolidated logic
+if ! create_zfs_pools "${PART1_BOOT}" "${PART2_BOOT}" "${PART1_ROOT}" "${PART2_ROOT}" "${ASHIFT}" "${TRIM_ENABLED}"; then
+    log_error "Failed to create ZFS pools"
+    exit 1
+fi
+
+POOLS_CREATED="yes"
+
+# ============================================================================
+# CRITICAL: Synchronize hostid to target system after pools are mounted
+# ============================================================================
+log_info "Synchronizing hostid to target system..."
+
+# Ensure target system directory exists (pools created /mnt structure)
+if [[ ! -d "/mnt/etc" ]]; then
+    mkdir -p /mnt/etc
+fi
 
 # Copy hostid to target system so it matches exactly
-log_info "Synchronizing hostid to target system..."
 cp /etc/hostid /mnt/etc/hostid
 
-# Verify file copy worked (chroot validation moved to after base system install)
+# Verify file copy worked
 if [[ -f "/mnt/etc/hostid" ]]; then
     log_info "✓ Hostid file copied to target system"
     log_info "  Installer hostid: ${HOSTID}"
@@ -1739,14 +1753,6 @@ else
     log_error "Failed to copy hostid file to target system!"
     exit 1
 fi
-
-# Create ZFS pools with consolidated logic
-if ! create_zfs_pools "${PART1_BOOT}" "${PART2_BOOT}" "${PART1_ROOT}" "${PART2_ROOT}" "${ASHIFT}" "${TRIM_ENABLED}"; then
-    log_error "Failed to create ZFS pools"
-    exit 1
-fi
-
-POOLS_CREATED="yes"
 
 # ============================================================================
 # CRITICAL: Verify pools were created with correct hostid
