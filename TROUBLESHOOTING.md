@@ -67,6 +67,7 @@ zdb -C bpool | grep hostid
 ## Development Notes
 
 ### Recent Changes
+- **2025-09-29:** v4.2.3 - Dual hostid validation with DRY refactoring
 - **2025-09-29:** v4.2.2 - Fixed hostid mountpoint conflict during pool creation
 - **2025-09-29:** v4.2.1 - Fixed hostid validation timing (validation moved to after base system install)
 - **2025-09-29:** v4.2.0 - Implemented hostid synchronization for clean imports
@@ -106,7 +107,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **4.2.2** (as of 2025-09-29)
+- Current version: **4.2.3** (as of 2025-09-29)
 
 ### AI Assistant Guidelines
 

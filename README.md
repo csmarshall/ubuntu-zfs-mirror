@@ -205,7 +205,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 4.2.2 - Fixed hostid mountpoint conflict during pool creation
+- **Script Version**: 4.2.3 - Dual hostid validation with DRY refactoring
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

@@ -18,8 +18,9 @@ Based on git commit analysis of the script evolution.
 | Sep 26, 2025 | a791119 | Bugfix | +31, -20 | "Fixed sync script" |
 | Sep 26, 2025 | cefe2ae | Major Feature | +320, -25 | "Additional care and support" |
 | Sep 29, 2025 | 714811d | **Critical Fix** | Major | v4.2.0 - Hostid synchronization implementation |
-| Sep 29, 2025 | Current | **Bugfix** | +17, -13 | v4.2.1 - Fixed hostid validation timing |
-| Sep 29, 2025 | Current | **Bugfix** | +18, -13 | v4.2.2 - Fixed hostid mountpoint conflict |
+| Sep 29, 2025 | 54e535a | **Bugfix** | +17, -13 | v4.2.1 - Fixed hostid validation timing |
+| Sep 29, 2025 | 9243e12 | **Bugfix** | +18, -13 | v4.2.2 - Fixed hostid mountpoint conflict |
+| Sep 29, 2025 | 20ddb26 | **Enhancement** | +35, -25 | v4.2.3 - Dual hostid validation with DRY refactoring |
 
 ## Major Phases
 
@@ -58,6 +59,11 @@ Based on git commit analysis of the script evolution.
   - Moved hostid file copy from before pool creation to after pools are mounted
   - Prevents "mountpoint '/mnt/' exists and is not empty" error during rpool creation
   - Resolves ZFS altroot conflict with pre-created /mnt/etc directory
+- **v4.2.3**: **DUAL VALIDATION** - Belt-and-suspenders hostid validation with DRY refactoring
+  - Created reusable `validate_pool_hostid()` function with robust zdb parsing
+  - Early validation: before base system install (fast failure, save time)
+  - Final validation: at installation completion (comprehensive verification)
+  - Unified error handling and debug output for consistent troubleshooting
 - **Problem**: "pool was previously in use from another system" errors on first boot
 - **Root cause**: Pools created with installer hostid, system boots with different hostid
 - **Solution**: Generate hostid before pool creation, synchronize to target system

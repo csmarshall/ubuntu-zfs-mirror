@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.2.2 - BUGFIX: Fixed hostid mountpoint conflict
+# Version: 4.2.3 - ENHANCEMENT: Dual hostid validation with DRY refactoring
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.2.2"
+readonly VERSION="4.2.3"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -220,6 +220,44 @@ perform_basic_zfs_cleanup() {
     sleep 2
         
     log_info "ZFS cleanup completed for ${pool_name}"
+}
+
+# Validate that ZFS pools have the correct hostid
+validate_pool_hostid() {
+    local context="$1"  # Description of when this validation is running
+    local expected_hostid="$2"  # Expected hostid value
+
+    log_info "Performing hostid validation ${context}..."
+
+    # Check rpool hostid using multiple methods for reliability
+    local rpool_hostid=$(zdb -C rpool 2>/dev/null | grep -E '(hostid[:=]|hostid\s+)' | head -1 | sed -E 's/.*hostid[:=]\s*([0-9a-fA-F]+).*/\1/' | tr -d "'\"" || echo "unknown")
+    local bpool_hostid=$(zdb -C bpool 2>/dev/null | grep -E '(hostid[:=]|hostid\s+)' | head -1 | sed -E 's/.*hostid[:=]\s*([0-9a-fA-F]+).*/\1/' | tr -d "'\"" || echo "unknown")
+
+    # Convert our hostid to the same format for comparison (hex without 0x prefix)
+    local expected_hostid_hex=$(printf "%x" "0x${expected_hostid}")
+
+    log_info "Hostid validation results:"
+    log_info "  Expected hostid: ${expected_hostid} (0x${expected_hostid_hex})"
+    log_info "  rpool hostid:    ${rpool_hostid}"
+    log_info "  bpool hostid:    ${bpool_hostid}"
+
+    # Verify both pools have correct hostid
+    if [[ "${rpool_hostid}" == "${expected_hostid_hex}" && "${bpool_hostid}" == "${expected_hostid_hex}" ]]; then
+        log_info "✓ Pool hostid validation PASSED ${context}"
+        log_info "✓ Both pools have correct hostid - ZFS import will be clean"
+        return 0
+    else
+        log_error "✗ Pool hostid validation FAILED ${context}!"
+        log_error "  This will cause 'pool was previously in use from another system' errors"
+        log_error "  Expected: ${expected_hostid_hex}, got rpool: ${rpool_hostid}, bpool: ${bpool_hostid}"
+
+        # Debug info to help troubleshoot
+        log_error "Debug info:"
+        zpool status 2>/dev/null || log_error "  No pools found"
+        zdb -C rpool 2>/dev/null | head -10 || log_error "  Cannot access rpool config"
+
+        return 1
+    fi
 }
 
 # Stop services using a disk with comprehensive checks
@@ -1754,39 +1792,7 @@ else
     exit 1
 fi
 
-# ============================================================================
-# CRITICAL: Verify pools were created with correct hostid
-# ============================================================================
-log_info "Verifying ZFS pools were created with correct hostid..."
-
-# Check rpool hostid
-RPOOL_HOSTID=$(zdb -C rpool | grep -E '^\s*hostid:' | awk '{print $2}' 2>/dev/null || echo "unknown")
-BPOOL_HOSTID=$(zdb -C bpool | grep -E '^\s*hostid:' | awk '{print $2}' 2>/dev/null || echo "unknown")
-
-# Convert our hostid to the same format for comparison (hex without 0x prefix)
-EXPECTED_HOSTID_HEX=$(printf "%x" "0x${HOSTID}")
-
-log_info "Hostid verification results:"
-log_info "  Expected hostid: ${HOSTID} (0x${EXPECTED_HOSTID_HEX})"
-log_info "  rpool hostid:    ${RPOOL_HOSTID}"
-log_info "  bpool hostid:    ${BPOOL_HOSTID}"
-
-# Verify both pools have correct hostid
-if [[ "${RPOOL_HOSTID}" == "${EXPECTED_HOSTID_HEX}" && "${BPOOL_HOSTID}" == "${EXPECTED_HOSTID_HEX}" ]]; then
-    log_info "✓ Pool hostid verification PASSED"
-    log_info "✓ Both pools created with correct hostid - first boot will be clean"
-else
-    log_error "✗ Pool hostid verification FAILED!"
-    log_error "  This will cause 'pool was previously in use from another system' errors"
-    log_error "  Expected: ${EXPECTED_HOSTID_HEX}, got rpool: ${RPOOL_HOSTID}, bpool: ${BPOOL_HOSTID}"
-    exit 1
-fi
-
-log_info "ZFS pools created successfully with verified hostid alignment!"
-echo ""
-log_info "Current pool status:"
-zpool list
-echo ""
+log_info "ZFS pools created successfully with hostid synchronization complete!"
 
 show_progress 5 10 "Creating ZFS datasets..."
 
@@ -1801,6 +1807,12 @@ mkdir -p /mnt/run
 mount -t tmpfs tmpfs /mnt/run
 mkdir -p /mnt/run/lock
 MOUNTS_ACTIVE="yes"
+
+# Validate hostid before starting lengthy base system installation
+if ! validate_pool_hostid "before base system install" "${HOSTID}"; then
+    log_error "Pool hostid validation failed - aborting installation"
+    exit 1
+fi
 
 show_progress 6 10 "Installing base system..."
 
@@ -2380,22 +2392,13 @@ if ! create_recovery_guide; then
 fi
 
 # Final validation: verify target system hostid matches ZFS pool hostid
-log_info "Performing final hostid validation..."
 TARGET_HOSTID=$(chroot /mnt hostid 2>/dev/null || echo "failed")
-POOL_HOSTID=$(zdb -C rpool | grep 'hostid=' | cut -d'=' -f2 | tr -d "'" 2>/dev/null || echo "failed")
-
-if [[ "${TARGET_HOSTID}" == "${POOL_HOSTID}" && "${TARGET_HOSTID}" != "failed" && "${TARGET_HOSTID}" != "" ]]; then
-    log_info "✓ Final hostid validation successful"
-    log_info "  Target system hostid: ${TARGET_HOSTID}"
-    log_info "  ZFS pool hostid:      ${POOL_HOSTID}"
-    log_info "✓ Pools will import cleanly on first boot"
-else
-    log_error "Final hostid validation failed!"
-    log_error "  Target system hostid: ${TARGET_HOSTID}"
-    log_error "  ZFS pool hostid:      ${POOL_HOSTID}"
-    log_error "This may cause 'pool was previously in use from another system' errors"
+if ! validate_pool_hostid "at completion" "${TARGET_HOSTID}"; then
+    log_error "Final hostid validation failed - installation may have issues on first boot"
+    log_error "Target system hostid: ${TARGET_HOSTID}"
     exit 1
 fi
+log_info "✓ Target system hostid (${TARGET_HOSTID}) matches pool hostid"
 
 show_progress 10 10 "Installation complete!"
 
