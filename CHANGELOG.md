@@ -22,6 +22,7 @@ Based on git commit analysis of the script evolution.
 | Sep 29, 2025 | 9243e12 | **Bugfix** | +18, -13 | v4.2.2 - Fixed hostid mountpoint conflict |
 | Sep 29, 2025 | 20ddb26 | **Enhancement** | +35, -25 | v4.2.3 - Dual hostid validation with DRY refactoring |
 | Sep 29, 2025 | Working | **Bugfix** | +15, -8 | v4.2.4 - Fixed zdb hostid validation for active pools |
+| Sep 29, 2025 | Working | **Bugfix** | +3, -3 | v4.2.5 - Fixed hostid hex formatting with leading zeros |
 
 ## Major Phases
 
@@ -70,6 +71,11 @@ Based on git commit analysis of the script evolution.
   - Added decimal-to-hex conversion for hostid comparison (ZFS stores as decimal)
   - Enhanced debug output showing both decimal and hex hostid formats
   - Resolves "zdb: can't open 'rpool': No such file or directory" validation errors
+- **v4.2.5**: **HEX FORMAT FIX** - Fixed hostid hex conversion to preserve leading zeros
+  - Changed `printf "%x"` to `printf "%08x"` for 8-digit hex format with leading zeros
+  - Resolves false validation failures when hostid has leading zeros (e.g., 000c4634)
+  - Ensures proper comparison between pool hostid and target system hostid
+  - Fixes "Expected: 79a07734, got rpool: c4634" type validation errors
 - **Problem**: "pool was previously in use from another system" errors on first boot
 - **Root cause**: Pools created with installer hostid, system boots with different hostid
 - **Solution**: Generate hostid before pool creation, synchronize to target system

@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.2.4 - BUGFIX: Fixed zdb hostid validation for active pools
+# Version: 4.2.5 - BUGFIX: Fixed hostid hex formatting with leading zeros
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.2.4"
+readonly VERSION="4.2.5"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -233,18 +233,18 @@ validate_pool_hostid() {
     local rpool_hostid_decimal=$(zdb -l "${PART1_ROOT}" 2>/dev/null | grep -E '^\s*hostid:' | head -1 | awk '{print $2}' || echo "unknown")
     local bpool_hostid_decimal=$(zdb -l "${PART1_BOOT}" 2>/dev/null | grep -E '^\s*hostid:' | head -1 | awk '{print $2}' || echo "unknown")
 
-    # Convert decimal hostids to hex for comparison
+    # Convert decimal hostids to hex for comparison (8-digit format with leading zeros)
     local rpool_hostid="unknown"
     local bpool_hostid="unknown"
     if [[ "${rpool_hostid_decimal}" != "unknown" && "${rpool_hostid_decimal}" =~ ^[0-9]+$ ]]; then
-        rpool_hostid=$(printf "%x" "${rpool_hostid_decimal}")
+        rpool_hostid=$(printf "%08x" "${rpool_hostid_decimal}")
     fi
     if [[ "${bpool_hostid_decimal}" != "unknown" && "${bpool_hostid_decimal}" =~ ^[0-9]+$ ]]; then
-        bpool_hostid=$(printf "%x" "${bpool_hostid_decimal}")
+        bpool_hostid=$(printf "%08x" "${bpool_hostid_decimal}")
     fi
 
-    # Convert our expected hostid to hex without 0x prefix
-    local expected_hostid_hex=$(printf "%x" "0x${expected_hostid}")
+    # Convert our expected hostid to hex without 0x prefix (8-digit format)
+    local expected_hostid_hex=$(printf "%08x" "0x${expected_hostid}")
 
     log_info "Hostid validation results:"
     log_info "  Expected hostid: ${expected_hostid} (0x${expected_hostid_hex})"

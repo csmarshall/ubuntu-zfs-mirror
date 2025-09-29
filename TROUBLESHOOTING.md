@@ -67,6 +67,7 @@ zdb -C bpool | grep hostid
 ## Development Notes
 
 ### Recent Changes
+- **2025-09-29:** v4.2.5 - Fixed hostid hex formatting with leading zeros
 - **2025-09-29:** v4.2.4 - Fixed zdb hostid validation for active pools
 - **2025-09-29:** v4.2.3 - Dual hostid validation with DRY refactoring
 - **2025-09-29:** v4.2.2 - Fixed hostid mountpoint conflict during pool creation
@@ -108,7 +109,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **4.2.4** (as of 2025-09-29)
+- Current version: **4.2.5** (as of 2025-09-29)
 
 ### AI Assistant Guidelines
 
