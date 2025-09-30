@@ -231,7 +231,7 @@ Linux hostid files must be written in little-endian byte order, but hex string c
 python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${HOSTID_DECIMAL}))"
 ```
 
-#### New Simplified Approach (v4.3.0+)
+#### New Simplified Approach (v4.3.1+)
 
 **Major Change: Pool-to-Target Hostid Synchronization**
 
@@ -243,30 +243,39 @@ Starting with v4.3.0, the script uses a completely new approach that eliminates 
 3. Multiple validation points with timing issues
 4. Complex error-prone synchronization logic
 
-**New Approach (v4.3.0+):**
+**New Approach (v4.3.1+):**
 1. Create pools with whatever hostid installer has
 2. Complete entire installation normally
-3. **Final step**: Read actual pool hostid → write to `/mnt/etc/hostid`
-4. Single validation: target system hostid matches pool hostid
+3. **Final step**: Use rpool as authoritative source (cannot be exported)
+4. Set target system hostid to match rpool exactly
+5. Auto-sync bpool to match rpool via export/import
+6. Provide recovery instructions if synchronization fails
 
 **Benefits:**
 - ✅ No timing issues or race conditions
 - ✅ No risk of hostid files being overwritten mid-install
-- ✅ Pools are authoritative source of hostid
+- ✅ rpool is immutable authoritative source
+- ✅ Auto-recovery for bpool synchronization
+- ✅ Clear manual recovery instructions provided
 - ✅ Eliminates all "pool was previously in use from another system" errors
 - ✅ Much simpler logic and easier to debug
 
-**Code Example (v4.3.0):**
+**Code Example (v4.3.1):**
 ```bash
-# Read actual pool hostid (at end of installation)
-ACTUAL_POOL_HOSTID_DECIMAL=$(zdb -l "/dev/disk/by-id/${POOL_DEVICE}" | grep "hostid:" | awk '{print $2}')
+# Step 1: Read rpool hostid (authoritative source)
+RPOOL_HOSTID_DECIMAL=$(zdb -l "${PART1_ROOT}" | grep "hostid:" | awk '{print $2}')
 
-# Set target system to match
-printf "%08x" "${ACTUAL_POOL_HOSTID_DECIMAL}" | xxd -r -p > /mnt/etc/hostid
+# Step 2: Set target system to match rpool (little-endian)
+python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${RPOOL_HOSTID_DECIMAL}))"
 
-# Verify synchronization
-TARGET_HOSTID=$(od -An -tx4 -N4 /mnt/etc/hostid | tr -d ' ')
-validate_pool_hostid "at completion" "${TARGET_HOSTID}"
+# Step 3: Auto-sync bpool if needed
+BPOOL_HOSTID_DECIMAL=$(zdb -l "${PART1_BOOT}" | grep "hostid:" | awk '{print $2}')
+if [[ "${BPOOL_HOSTID_DECIMAL}" != "${RPOOL_HOSTID_DECIMAL}" ]]; then
+    zpool export bpool && zpool import bpool
+fi
+
+# Step 4: Final validation
+validate_pool_hostid "at completion" "${TARGET_HOSTID_RAW}"
 ```
 
 ### Quick Fixes
@@ -310,6 +319,7 @@ zdb -C bpool | grep hostid
 ## Development Notes
 
 ### Recent Changes
+- **2025-09-30:** v4.3.1 - **ENHANCED**: Implemented rpool-authoritative hostid synchronization with auto-recovery
 - **2025-09-30:** v4.3.0 - **MAJOR**: Implemented pool-to-target hostid synchronization (eliminates timing issues)
 - **2025-09-30:** v4.2.11 - Fixed inconsistent hostid reading commands (replaced hexdump with od)
 - **2025-09-30:** v4.2.10 - Fixed malformed od command causing hostid concatenation errors
@@ -359,7 +369,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **4.3.0** (as of 2025-09-30)
+- Current version: **4.3.1** (as of 2025-09-30)
 
 **⚠️ CRITICAL: Version Synchronization Required**
 When updating version numbers, you **MUST** update ALL of these locations:

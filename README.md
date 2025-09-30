@@ -117,11 +117,13 @@ flowchart TD
 3. **Hostid Synchronization** (Steps S-T): Read actual pool hostid and set target system to match
 4. **Final Validation** (Step U): Verify target system hostid matches pool hostid exactly
 
-**Key Design Principles:**
-- Both ZFS pools (rpool and bpool) have identical hostids since they're created in the same installer session
-- Script reads hostid from rpool as authoritative source, then sets target system to match
-- Final validation confirms both pools and target system have identical hostids
-- This approach eliminates timing issues and ensures pools always import cleanly without force flags
+**Key Design Principles (v4.3.1):**
+- **rpool is authoritative**: Cannot be exported during installation, so becomes immutable source of truth
+- **Target system follows rpool**: `/etc/hostid` file written to match rpool hostid exactly
+- **bpool auto-synchronization**: Automatic export/import to sync bpool with rpool if needed
+- **Little-endian byte order**: Uses `struct.pack('<I', ...)` for correct Linux hostid file format
+- **Auto-recovery guidance**: Provides clear instructions for manual intervention if needed
+- **No timing dependencies**: Eliminates all synchronization race conditions
 
 ## Post-Installation
 
@@ -205,7 +207,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 4.3.0 - Implemented pool-to-target hostid synchronization (eliminates timing issues)
+- **Script Version**: 4.3.1 - Enhanced rpool-authoritative hostid synchronization with auto-recovery
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

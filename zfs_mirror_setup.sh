@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.3.0 - MAJOR: Implemented pool-to-target hostid synchronization (eliminates timing issues)
+# Version: 4.3.1 - ENHANCED: Implemented rpool-authoritative hostid synchronization with auto-recovery
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.3.0"
+readonly VERSION="4.3.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2347,53 +2347,68 @@ if ! create_recovery_guide; then
     exit 1
 fi
 
-# Final step: Read actual pool hostid and set target system to match
-# This eliminates synchronization timing issues by matching target to pools
-log_info "Setting target system hostid to match ZFS pools..."
+# Final step: Synchronize all hostids using rpool as authoritative source
+# rpool cannot be exported (actively in use), so it becomes the immutable source of truth
+log_info "Synchronizing hostids using rpool as authoritative source..."
 
-# Get the actual hostid from the pools using device path
-# Note: PART1_ROOT is defined early in script (around line 1709) via get_partition_name()
-# Using the partition variables here ensures we read from the exact device that contains
-# the ZFS pool, maintaining consistency throughout the installation process
-#
-# Assumption: Both rpool and bpool have identical hostids since they were created
-# in the same installer session. We read from rpool (PART1_ROOT) as the authoritative
-# source, and the final validation will confirm both pools match the target system.
-ACTUAL_POOL_HOSTID_DECIMAL=$(zdb -l "${PART1_ROOT}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
-
-if [[ -z "${ACTUAL_POOL_HOSTID_DECIMAL}" || ! "${ACTUAL_POOL_HOSTID_DECIMAL}" =~ ^[0-9]+$ ]]; then
-    log_error "Failed to read hostid from pool device ${PART1_ROOT}"
-    log_error "Cannot set target system hostid to match pools"
+# Step 1: Read rpool hostid (authoritative source)
+RPOOL_HOSTID_DECIMAL=$(zdb -l "${PART1_ROOT}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
+if [[ -z "${RPOOL_HOSTID_DECIMAL}" || ! "${RPOOL_HOSTID_DECIMAL}" =~ ^[0-9]+$ ]]; then
+    log_error "Failed to read hostid from rpool device ${PART1_ROOT}"
+    log_error "Cannot proceed with hostid synchronization"
     exit 1
 fi
 
-# Convert decimal to hex and create binary hostid file
-ACTUAL_POOL_HOSTID_HEX=$(printf "%08x" "${ACTUAL_POOL_HOSTID_DECIMAL}")
-log_info "Pool hostid: ${ACTUAL_POOL_HOSTID_DECIMAL} (0x${ACTUAL_POOL_HOSTID_HEX})"
+RPOOL_HOSTID_HEX=$(printf "%08x" "${RPOOL_HOSTID_DECIMAL}")
+log_info "rpool hostid (authoritative): ${RPOOL_HOSTID_DECIMAL} (0x${RPOOL_HOSTID_HEX})"
 
-# Write the hostid in binary format to target system (little-endian)
-# Critical: Use struct.pack('<I', ...) to write in little-endian byte order
-# Linux hostid files must be little-endian, but hex string conversion creates big-endian
-# Example: 185232277 decimal = 0x0b0a6b95 hex must be written as bytes [95,6b,0a,0b]
-python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${ACTUAL_POOL_HOSTID_DECIMAL}))"
-
-# Verify the hostid file was written correctly
+# Step 2: Set target system to match rpool
+python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${RPOOL_HOSTID_DECIMAL}))"
 TARGET_HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
 if [[ -n "${TARGET_HOSTID_RAW}" && "${TARGET_HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
-    TARGET_HOSTID="${TARGET_HOSTID_RAW}"
-    log_info "Target system hostid set to: ${TARGET_HOSTID}"
+    log_info "✓ Target system hostid set to: ${TARGET_HOSTID_RAW}"
 else
     log_error "Failed to write hostid file to target system"
     exit 1
 fi
 
+# Step 3: Check and sync bpool to match rpool (if needed)
+BPOOL_HOSTID_DECIMAL=$(zdb -l "${PART1_BOOT}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
+if [[ -n "${BPOOL_HOSTID_DECIMAL}" && "${BPOOL_HOSTID_DECIMAL}" =~ ^[0-9]+$ ]]; then
+    if [[ "${BPOOL_HOSTID_DECIMAL}" != "${RPOOL_HOSTID_DECIMAL}" ]]; then
+        log_info "⚠️  bpool hostid mismatch detected: ${BPOOL_HOSTID_DECIMAL}"
+        log_info "🔧 Attempting to sync bpool hostid to match rpool..."
+        if zpool export bpool 2>/dev/null && zpool import bpool 2>/dev/null; then
+            # Verify the sync worked
+            NEW_BPOOL_HOSTID=$(zdb -l "${PART1_BOOT}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
+            if [[ "${NEW_BPOOL_HOSTID}" == "${RPOOL_HOSTID_DECIMAL}" ]]; then
+                log_info "✓ bpool hostid synchronized successfully"
+            else
+                log_warning "⚠️  bpool hostid sync may have failed - manual intervention may be needed"
+            fi
+        else
+            log_warning "⚠️  Could not export/import bpool - hostid mismatch may cause boot issues"
+            log_warning "If boot fails, run: zpool import -f rpool && zpool import -f bpool && reboot"
+        fi
+    else
+        log_info "✓ bpool hostid already matches rpool"
+    fi
+else
+    log_warning "⚠️  Could not read bpool hostid - proceeding with rpool hostid"
+fi
+
 # Final validation: verify target hostid matches pool hostid
-if ! validate_pool_hostid "at completion" "${TARGET_HOSTID}"; then
+if ! validate_pool_hostid "at completion" "${TARGET_HOSTID_RAW}"; then
     log_error "Final hostid validation failed - target system hostid does not match pools"
-    log_error "Target system hostid: ${TARGET_HOSTID}"
+    log_error "Target system hostid: ${TARGET_HOSTID_RAW}"
+    log_error "Manual intervention required on first boot:"
+    log_error "  zpool import -f rpool"
+    log_error "  zpool import -f bpool"
+    log_error "  reboot"
     exit 1
 fi
-log_info "✓ Target system hostid (${TARGET_HOSTID}) matches pool hostid"
+log_info "✓ Target system hostid (${TARGET_HOSTID_RAW}) matches pool hostid"
+log_info "✓ Clean ZFS import expected on first boot"
 
 show_progress 10 10 "Installation complete!"
 
