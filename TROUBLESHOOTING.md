@@ -76,7 +76,9 @@ zpool import -f bpool
 echo -ne '\x0d\x31\xd8\xfd' > /mnt/etc/hostid
 ```
 
-### Missing hexdump in Chroot Environment (Fixed v4.2.8)
+### Chroot Hostid Generation Issues (Fixed v4.2.8-v4.2.9)
+
+#### Missing hexdump in Chroot Environment (Fixed v4.2.8)
 
 **Symptoms:**
 - Log shows: `/tmp/configure_system.sh: line 134: hexdump: command not found`
@@ -99,6 +101,35 @@ chroot /mnt apt-get install --yes util-linux
 # Or use od to read hostid file manually
 HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /etc/hostid | tr -d ' ')")
 echo "Current hostid: ${HOSTID}"
+```
+
+#### Chroot Hostid Command Ignoring Synchronized File (Fixed v4.2.9)
+
+**Symptoms:**
+- Pools created with correct hostid (e.g., `056c64de`)
+- Final validation fails with different hostid (e.g., `75eded19`)
+- Log shows: `ZFS configuration created with hostid: 75eded19` but pools have `056c64de`
+
+**Root Cause:**
+The `chroot /mnt hostid` command generates new random hostids instead of reading the synchronized `/mnt/etc/hostid` file.
+
+**Fix Applied (v4.2.9):**
+```bash
+# Changed from:
+HOSTID=$(chroot /mnt hostid 2>/dev/null || echo "")
+
+# To:
+HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /mnt/etc/hostid | tr -d ' ')" || echo "failed")
+```
+
+**Manual Fix (if using old script):**
+```bash
+# Read hostid directly from synchronized file
+HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /mnt/etc/hostid | tr -d ' ')")
+echo "Synchronized hostid: ${HOSTID}"
+
+# Verify both files match
+cmp /etc/hostid /mnt/etc/hostid && echo "Files match" || echo "Files differ"
 ```
 
 ### Quick Fixes

@@ -2193,12 +2193,15 @@ fi
 
 show_progress 9 10 "Finalizing installation..."
 
-# Generate hostid and setup first-boot cleanup
-HOSTID=$(chroot /mnt hostid 2>/dev/null || echo "")
-if [[ -z "${HOSTID}" ]]; then
-    log_error "Failed to get hostid from chroot"
+# Read hostid from the synchronized file instead of using chroot hostid command
+# The chroot hostid command generates new random hostids instead of reading the file
+HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')" 2>/dev/null || echo "failed")
+if [[ "${HOSTID}" == "failed" || "${HOSTID}" == "00000000" || -z "${HOSTID}" ]]; then
+    log_error "Failed to read synchronized hostid from /mnt/etc/hostid (HOSTID=${HOSTID})"
+    log_error "Target hostid file may be missing or corrupted"
     exit 1
 fi
+log_info "Using synchronized hostid for ZFS configuration: ${HOSTID}"
 
 if ! setup_zfs_config "${HOSTID}"; then
     log_error "Failed to setup ZFS configuration"
