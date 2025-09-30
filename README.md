@@ -117,7 +117,11 @@ flowchart TD
 3. **Hostid Synchronization** (Steps S-T): Read actual pool hostid and set target system to match
 4. **Final Validation** (Step U): Verify target system hostid matches pool hostid exactly
 
-This simplified approach eliminates timing issues and ensures pools always import cleanly without force flags.
+**Key Design Principles:**
+- Both ZFS pools (rpool and bpool) have identical hostids since they're created in the same installer session
+- Script reads hostid from rpool as authoritative source, then sets target system to match
+- Final validation confirms both pools and target system have identical hostids
+- This approach eliminates timing issues and ensures pools always import cleanly without force flags
 
 ## Post-Installation
 

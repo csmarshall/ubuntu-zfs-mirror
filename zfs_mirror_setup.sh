@@ -2352,11 +2352,17 @@ fi
 log_info "Setting target system hostid to match ZFS pools..."
 
 # Get the actual hostid from the pools using device path
-POOL_DEVICE="${DRIVE1_ID}-part4"
-ACTUAL_POOL_HOSTID_DECIMAL=$(zdb -l "/dev/disk/by-id/${POOL_DEVICE}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
+# Note: PART1_ROOT is defined early in script (around line 1709) via get_partition_name()
+# Using the partition variables here ensures we read from the exact device that contains
+# the ZFS pool, maintaining consistency throughout the installation process
+#
+# Assumption: Both rpool and bpool have identical hostids since they were created
+# in the same installer session. We read from rpool (PART1_ROOT) as the authoritative
+# source, and the final validation will confirm both pools match the target system.
+ACTUAL_POOL_HOSTID_DECIMAL=$(zdb -l "${PART1_ROOT}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
 
 if [[ -z "${ACTUAL_POOL_HOSTID_DECIMAL}" || ! "${ACTUAL_POOL_HOSTID_DECIMAL}" =~ ^[0-9]+$ ]]; then
-    log_error "Failed to read hostid from pool device ${POOL_DEVICE}"
+    log_error "Failed to read hostid from pool device ${PART1_ROOT}"
     log_error "Cannot set target system hostid to match pools"
     exit 1
 fi
