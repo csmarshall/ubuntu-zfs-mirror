@@ -203,6 +203,34 @@ else
 fi
 ```
 
+#### Hostid Byte Order Issues (Fixed v4.3.0+)
+
+**Symptoms:**
+- Pool hostid validation fails even though synchronization appears to work
+- Log shows different hex values: `Expected: 956b0a0b, got rpool: 0b0a6b95`
+- Hostids appear to be "backwards" or byte-swapped
+
+**Root Cause:**
+Linux hostid files must be written in little-endian byte order, but hex string conversion creates big-endian format.
+
+**Example of the Problem:**
+```bash
+# Pool hostid: 185232277 (decimal) = 0x0b0a6b95 (hex)
+# Wrong way (big-endian): printf "%08x" 185232277 | xxd -r -p
+# Creates bytes: [0b, 0a, 6b, 95]
+# When read back: 956b0a0b (reversed!)
+
+# Correct way (little-endian): struct.pack('<I', 185232277)
+# Creates bytes: [95, 6b, 0a, 0b]
+# When read back: 0b0a6b95 (matches pool!)
+```
+
+**Fix Applied (v4.3.0):**
+```bash
+# Use Python struct.pack for correct byte order
+python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${HOSTID_DECIMAL}))"
+```
+
 #### New Simplified Approach (v4.3.0+)
 
 **Major Change: Pool-to-Target Hostid Synchronization**

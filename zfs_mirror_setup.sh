@@ -2371,8 +2371,11 @@ fi
 ACTUAL_POOL_HOSTID_HEX=$(printf "%08x" "${ACTUAL_POOL_HOSTID_DECIMAL}")
 log_info "Pool hostid: ${ACTUAL_POOL_HOSTID_DECIMAL} (0x${ACTUAL_POOL_HOSTID_HEX})"
 
-# Write the hostid in binary format to target system
-printf "%08x" "${ACTUAL_POOL_HOSTID_DECIMAL}" | xxd -r -p > /mnt/etc/hostid
+# Write the hostid in binary format to target system (little-endian)
+# Critical: Use struct.pack('<I', ...) to write in little-endian byte order
+# Linux hostid files must be little-endian, but hex string conversion creates big-endian
+# Example: 185232277 decimal = 0x0b0a6b95 hex must be written as bytes [95,6b,0a,0b]
+python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${ACTUAL_POOL_HOSTID_DECIMAL}))"
 
 # Verify the hostid file was written correctly
 TARGET_HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
