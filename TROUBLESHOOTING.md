@@ -168,6 +168,79 @@ else
 fi
 ```
 
+#### Inconsistent Hostid Reading Commands (Fixed v4.2.11)
+
+**Symptoms:**
+- Final validation fails even though pools were created correctly
+- Mix of `od` and `hexdump` commands causing inconsistent hostid reading
+- Hostid synchronization works during install but fails at final validation
+
+**Root Cause:**
+The script used `od` commands in some places (chroot environment) but still used `hexdump` in the final validation step, causing inconsistent hostid reading between install and target system environments.
+
+**Fix Applied (v4.2.11):**
+```bash
+# Changed from (inconsistent):
+TARGET_HOSTID=$(printf "%08x" "$(hexdump -e '1/4 "%u"' /mnt/etc/hostid)" 2>/dev/null || echo "failed")
+
+# To (consistent with rest of script):
+TARGET_HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
+if [[ -n "${TARGET_HOSTID_RAW}" && "${TARGET_HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
+    TARGET_HOSTID="${TARGET_HOSTID_RAW}"
+else
+    TARGET_HOSTID="failed"
+fi
+```
+
+**Manual Fix (if using old script):**
+```bash
+# Use consistent od command for all hostid reading
+TARGET_HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
+if [[ "${TARGET_HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
+    echo "Valid hostid: ${TARGET_HOSTID_RAW}"
+else
+    echo "Failed to read hostid"
+fi
+```
+
+#### New Simplified Approach (v4.3.0+)
+
+**Major Change: Pool-to-Target Hostid Synchronization**
+
+Starting with v4.3.0, the script uses a completely new approach that eliminates all previous timing and synchronization issues:
+
+**Old Approach (v4.2.x):**
+1. Generate hostid early with `zgenhostid -f`
+2. Try to synchronize during installation
+3. Multiple validation points with timing issues
+4. Complex error-prone synchronization logic
+
+**New Approach (v4.3.0+):**
+1. Create pools with whatever hostid installer has
+2. Complete entire installation normally
+3. **Final step**: Read actual pool hostid → write to `/mnt/etc/hostid`
+4. Single validation: target system hostid matches pool hostid
+
+**Benefits:**
+- ✅ No timing issues or race conditions
+- ✅ No risk of hostid files being overwritten mid-install
+- ✅ Pools are authoritative source of hostid
+- ✅ Eliminates all "pool was previously in use from another system" errors
+- ✅ Much simpler logic and easier to debug
+
+**Code Example (v4.3.0):**
+```bash
+# Read actual pool hostid (at end of installation)
+ACTUAL_POOL_HOSTID_DECIMAL=$(zdb -l "/dev/disk/by-id/${POOL_DEVICE}" | grep "hostid:" | awk '{print $2}')
+
+# Set target system to match
+printf "%08x" "${ACTUAL_POOL_HOSTID_DECIMAL}" | xxd -r -p > /mnt/etc/hostid
+
+# Verify synchronization
+TARGET_HOSTID=$(od -An -tx4 -N4 /mnt/etc/hostid | tr -d ' ')
+validate_pool_hostid "at completion" "${TARGET_HOSTID}"
+```
+
 ### Quick Fixes
 
 **Emergency Force Import:**
@@ -209,6 +282,13 @@ zdb -C bpool | grep hostid
 ## Development Notes
 
 ### Recent Changes
+- **2025-09-30:** v4.3.0 - **MAJOR**: Implemented pool-to-target hostid synchronization (eliminates timing issues)
+- **2025-09-30:** v4.2.11 - Fixed inconsistent hostid reading commands (replaced hexdump with od)
+- **2025-09-30:** v4.2.10 - Fixed malformed od command causing hostid concatenation errors
+- **2025-09-30:** v4.2.9 - Fixed chroot hostid command generating random hostids instead of using synchronized file
+- **2025-09-30:** v4.2.8 - Fixed missing hexdump in chroot causing hostid synchronization failures
+- **2025-09-30:** v4.2.7 - Fixed hostid generation timing bug causing pool validation failures
+- **2025-09-29:** v4.2.6 - Fixed chroot hostid reading to use synchronized file
 - **2025-09-29:** v4.2.5 - Fixed hostid hex formatting with leading zeros
 - **2025-09-29:** v4.2.4 - Fixed zdb hostid validation for active pools
 - **2025-09-29:** v4.2.3 - Dual hostid validation with DRY refactoring
@@ -251,7 +331,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **4.2.10** (as of 2025-09-30)
+- Current version: **4.3.0** (as of 2025-09-30)
 
 **⚠️ CRITICAL: Version Synchronization Required**
 When updating version numbers, you **MUST** update ALL of these locations:

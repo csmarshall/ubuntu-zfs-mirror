@@ -1,6 +1,6 @@
 # Ubuntu 24.04 ZFS Mirror Root Installer
 
-Enhanced version of the Ubuntu ZFS mirror root installation script with production fixes and bulletproof first boot.
+Enhanced version of the Ubuntu ZFS mirror root installation script with production fixes and bulletproof hostid synchronization for clean first boot.
 
 ## Overview
 
@@ -8,10 +8,10 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 
 ## Features
 
-- **Bulletproof First Boot**: Reliable ZFS pool import without cache file issues
+- **Clean Pool Import**: Pools import without force flags via automatic hostid synchronization
 - **Full Drive Redundancy**: Both drives are bootable with automatic failover
 - **Production Ready**: Enhanced error handling and recovery mechanisms
-- **Automated Cleanup**: Force flags removed automatically after successful first boot
+- **No Manual Intervention**: Eliminates "pool was previously in use from another system" errors
 - **UEFI Support**: Modern boot configuration with proper EFI handling
 
 ## Requirements
@@ -64,9 +64,9 @@ sudo ./zfs_mirror_setup.sh --prepare hostname /dev/disk/by-id/drive1 /dev/disk/b
 3. **Root Pool Partition**: Remaining space for ZFS root pool
 
 ### System Configuration
-- **First Boot Cleanup**: Automatic removal of force import flags
-- **Service Configuration**: Bulletproof ZFS import services
-- **Recovery Tools**: Manual cleanup utilities included
+- **Clean Pool Import**: No force flags needed due to hostid synchronization
+- **Service Configuration**: Bulletproof ZFS import services using scan-based detection
+- **Recovery Tools**: Manual utilities and troubleshooting guides included
 
 ## Installation Flow
 
@@ -82,47 +82,42 @@ flowchart TD
     E --> F
 
     F --> G[Install Required Packages]
-    G --> H[Generate Unique Hostid]
-    H --> I[Create ZFS Pools]
+    G --> H[Create ZFS Pools]
+    H --> I[Boot Pool Creation]
+    I --> J[Root Pool Creation]
+    J --> K[Verify Empty /mnt for Altroot]
+    K --> L[Pools Mount to /mnt]
 
-    I --> J[Boot Pool Creation]
-    J --> K[Root Pool Creation]
-    K --> L[Verify Empty /mnt for Altroot]
-    L --> M[Pools Mount to /mnt]
+    L --> M[Create ZFS Datasets]
+    M --> N[Install Ubuntu Base System]
+    N --> O[Configure Target System]
 
-    M --> N[Synchronize Hostid to Target]
-    N --> O[Copy /etc/hostid → /mnt/etc/hostid]
-    O --> P[Verify Pool Hostid Alignment]
+    O --> P[Setup Network & Users]
+    P --> Q[Install & Configure GRUB]
+    Q --> R[Generate Initramfs]
 
-    P --> Q[Create ZFS Datasets]
-    Q --> R[Install Ubuntu Base System]
-    R --> S[Configure Target System]
+    R --> S[Read Actual Pool Hostid]
+    S --> T[Set Target System Hostid to Match]
+    T --> U[Final Validation]
+    U --> V{Hostid Match?}
+    V -->|No| W[❌ FAIL: Hostid Sync Error]
+    V -->|Yes| X[✅ Installation Complete]
 
-    S --> T[Setup Network & Users]
-    T --> U[Install & Configure GRUB]
-    U --> V[Generate Initramfs]
-
-    V --> W[Final Hostid Validation]
-    W --> X{Hostid Match?}
-    X -->|No| Y[❌ FAIL: Hostid Mismatch]
-    X -->|Yes| Z[✅ Installation Complete]
-
-    style H fill:#e1f5fe
-    style N fill:#e8f5e8
-    style O fill:#e8f5e8
-    style P fill:#e8f5e8
-    style W fill:#fff3e0
-    style Z fill:#e8f5e8
-    style Y fill:#ffebee
+    style S fill:#e1f5fe
+    style T fill:#e8f5e8
+    style U fill:#fff3e0
+    style X fill:#e8f5e8
+    style W fill:#ffebee
 ```
 
 ### Critical Validation Points
 
-1. **Pre-Pool Hostid Generation** (Step H): Creates unique random hostid for this installation
-2. **Post-Pool Hostid Sync** (Steps N-P): Ensures target system matches pool hostid
-3. **Final Validation** (Step W): Confirms target system and pools have identical hostids
+1. **Pool Creation** (Steps H-L): ZFS pools created with installer's current hostid
+2. **Complete Installation** (Steps M-R): Full system installation completed
+3. **Hostid Synchronization** (Steps S-T): Read actual pool hostid and set target system to match
+4. **Final Validation** (Step U): Verify target system hostid matches pool hostid exactly
 
-This sequence prevents "pool was previously in use from another system" errors by ensuring perfect hostid alignment.
+This simplified approach eliminates timing issues and ensures pools always import cleanly without force flags.
 
 ## Post-Installation
 
@@ -134,8 +129,9 @@ zpool status
 # Verify both pools imported
 zpool list
 
-# Check first boot cleanup
-systemctl status zfs-first-boot-cleanup.service
+# Check hostid alignment
+hostid
+sudo zdb -l /dev/disk/by-id/your-drive-part4 | grep hostid
 ```
 
 ### Maintenance Commands
@@ -205,7 +201,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 4.2.10 - Fixed malformed od command causing hostid concatenation errors
+- **Script Version**: 4.3.0 - Implemented pool-to-target hostid synchronization (eliminates timing issues)
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

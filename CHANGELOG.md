@@ -26,10 +26,12 @@ Based on git commit analysis of the script evolution.
 | Sep 29, 2025 | 9dd6428 | **Bugfix** | +1, -0 | hostid var fix |
 | Sep 29, 2025 | 15359f8 | **Bugfix** | +3, -3 | v4.2.5 - Fixed hostid hex formatting with leading zeros |
 | Sep 29, 2025 | 9490133 | **Critical Fix** | +6, -2 | v4.2.6 - Fixed chroot hostid reading to use synchronized file |
-| Sep 30, 2025 | abc1234 | **Critical Fix** | +17, -5 | v4.2.7 - Fixed hostid generation timing bug causing pool validation failures |
-| Sep 30, 2025 | def5678 | **Critical Fix** | +8, -3 | v4.2.8 - Fixed missing hexdump in chroot causing hostid synchronization failures |
-| Sep 30, 2025 | Working | **Critical Fix** | +7, -5 | v4.2.9 - Fixed chroot hostid command generating random hostids instead of using synchronized file |
-| Sep 30, 2025 | Working | **Critical Fix** | +12, -2 | v4.2.10 - Fixed malformed od command causing hostid concatenation errors |
+| Sep 30, 2025 | 5c4e358 | **Critical Fix** | +17, -5 | v4.2.7 - Fixed hostid generation timing bug causing pool validation failures |
+| Sep 30, 2025 | de2e3bf | **Critical Fix** | +8, -3 | v4.2.8 - Fixed missing hexdump in chroot causing hostid synchronization failures |
+| Sep 30, 2025 | 731e08f | **Critical Fix** | +7, -5 | v4.2.9 - Fixed chroot hostid command generating random hostids instead of using synchronized file |
+| Sep 30, 2025 | 1254b71 | **Critical Fix** | +12, -2 | v4.2.10 - Fixed malformed od command causing hostid concatenation errors |
+| Sep 30, 2025 | Working | **Critical Fix** | +5, -1 | v4.2.11 - Fixed inconsistent hostid reading commands (replaced hexdump with od) |
+| Sep 30, 2025 | Working | **Major Release** | +45, -85 | v4.3.0 - Implemented pool-to-target hostid synchronization (eliminates timing issues) |
 
 ## Major Phases
 

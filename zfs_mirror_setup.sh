@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.2.10 - BUGFIX: Fixed malformed od command causing hostid concatenation errors
+# Version: 4.3.0 - MAJOR: Implemented pool-to-target hostid synchronization (eliminates timing issues)
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.2.10"
+readonly VERSION="4.3.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -1740,55 +1740,9 @@ show_progress 4 10 "Creating root pool..."
 # Cleanup before root pool creation
 perform_basic_zfs_cleanup "rpool" "${PART1_ROOT}" "${PART2_ROOT}"
 
-# ============================================================================
-# CRITICAL: Generate and synchronize ZFS hostid across installer and target
-# ============================================================================
-#
-# This is the most important step for preventing "pool was previously in use
-# from another system" errors on first boot. The problem occurs when:
-#
-# 1. ZFS pools are created with installer USB hostid (random/unknown)
-# 2. Target system boots with different hostid (also random)
-# 3. ZFS refuses to import pools due to hostid mismatch
-# 4. Manual force import required: "zpool import -f rpool"
-#
-# Our solution ensures perfect hostid alignment:
-# 1. Generate unique hostid for this installation
-# 2. Set it in installer environment (for pool creation)
-# 3. Copy same hostid to target system (for pool import)
-# 4. Pools and system use identical hostid = clean import
-#
-log_header "Configuring ZFS hostid for clean first boot"
-log_info "Generating unique hostid and synchronizing across installer and target system"
-log_info "This eliminates 'pool was previously in use from another system' errors"
-
-# Show current state before changes
-ORIGINAL_HOSTID=$(hostid 2>/dev/null || echo "none")
-log_info "Original installer hostid: ${ORIGINAL_HOSTID}"
-
-# Generate new hostid for this installation
-log_info "Generating new hostid for this ZFS installation..."
-zgenhostid -f
-
-# Wait for hostid to take effect and verify it's changed
-sleep 1
-HOSTID=$(hostid)
-NEW_HOSTID_CHECK=$(hostid)
-
-# Ensure hostid actually changed from original
-if [[ "${HOSTID}" == "${ORIGINAL_HOSTID}" ]]; then
-    log_error "Hostid generation failed - hostid unchanged: ${HOSTID}"
-    exit 1
-fi
-
-# Double-check hostid consistency
-if [[ "${HOSTID}" != "${NEW_HOSTID_CHECK}" ]]; then
-    log_error "Hostid inconsistent after generation: ${HOSTID} vs ${NEW_HOSTID_CHECK}"
-    exit 1
-fi
-
-log_info "Generated new hostid: ${HOSTID}"
-log_info "Hostid verification passed - proceeding with pool creation"
+# Create ZFS pools
+log_header "Creating ZFS pools"
+log_info "Creating mirrored ZFS pools (hostid will be synchronized at end of installation)"
 
 # Create ZFS pools with consolidated logic
 if ! create_zfs_pools "${PART1_BOOT}" "${PART2_BOOT}" "${PART1_ROOT}" "${PART2_ROOT}" "${ASHIFT}" "${TRIM_ENABLED}"; then
@@ -1797,31 +1751,7 @@ if ! create_zfs_pools "${PART1_BOOT}" "${PART2_BOOT}" "${PART1_ROOT}" "${PART2_R
 fi
 
 POOLS_CREATED="yes"
-
-# ============================================================================
-# CRITICAL: Synchronize hostid to target system after pools are mounted
-# ============================================================================
-log_info "Synchronizing hostid to target system..."
-
-# Ensure target system directory exists (pools created /mnt structure)
-if [[ ! -d "/mnt/etc" ]]; then
-    mkdir -p /mnt/etc
-fi
-
-# Copy hostid to target system so it matches exactly
-cp /etc/hostid /mnt/etc/hostid
-
-# Verify file copy worked
-if [[ -f "/mnt/etc/hostid" ]]; then
-    log_info "✓ Hostid file copied to target system"
-    log_info "  Installer hostid: ${HOSTID}"
-    log_info "✓ ZFS pools will import cleanly on first boot (no force flag needed)"
-else
-    log_error "Failed to copy hostid file to target system!"
-    exit 1
-fi
-
-log_info "ZFS pools created successfully with hostid synchronization complete!"
+log_info "ZFS pools created successfully!"
 
 show_progress 5 10 "Creating ZFS datasets..."
 
@@ -1837,11 +1767,8 @@ mount -t tmpfs tmpfs /mnt/run
 mkdir -p /mnt/run/lock
 MOUNTS_ACTIVE="yes"
 
-# Validate hostid before starting lengthy base system installation
-if ! validate_pool_hostid "before base system install" "${HOSTID}"; then
-    log_error "Pool hostid validation failed - aborting installation"
-    exit 1
-fi
+# Pools created successfully - proceeding with base system installation
+# (Hostid synchronization will be performed at end of installation)
 
 show_progress 6 10 "Installing base system..."
 
@@ -1970,6 +1897,7 @@ apt-get install --yes \
     nano vim curl wget \
     openssh-server \
     sudo rsync \
+    bsdextrautils \
     htop \
     software-properties-common \
     systemd-timesyncd \
@@ -2060,21 +1988,8 @@ net.ipv4.tcp_fastopen=3
 SYSCTL_EOF
 fi
 
-# Hostid already generated and synchronized earlier in the process
-# Read from the synchronized hostid file instead of hostid command (we're in chroot)
-# Use od instead of hexdump since hexdump might not be available in chroot
-HOSTID_RAW=$(od -An -tx4 -N4 /etc/hostid 2>/dev/null | tr -d ' ')
-if [[ -n "${HOSTID_RAW}" && "${HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
-    HOSTID="${HOSTID_RAW}"
-else
-    HOSTID="failed"
-fi
-if [[ "${HOSTID}" == "failed" || "${HOSTID}" == "00000000" ]]; then
-    log_error "Failed to read synchronized hostid from /etc/hostid (HOSTID=${HOSTID})"
-    log_error "hexdump/od may not be available in chroot environment"
-    exit 1
-fi
-log_info "Using previously generated hostid for ZFS: ${HOSTID}"
+# ZFS configuration will be set up after installation completes
+log_info "ZFS configuration will be created with proper hostid after installation"
 
 # Configure GRUB with console and AppArmor settings
 if [[ "${USE_SERIAL_CONSOLE:-false}" == "true" ]]; then
@@ -2198,22 +2113,12 @@ fi
 
 show_progress 9 10 "Finalizing installation..."
 
-# Read hostid from the synchronized file instead of using chroot hostid command
-# The chroot hostid command generates new random hostids instead of reading the file
-HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
-if [[ -n "${HOSTID_RAW}" && "${HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
-    HOSTID="${HOSTID_RAW}"
-else
-    HOSTID="failed"
-fi
-if [[ "${HOSTID}" == "failed" || "${HOSTID}" == "00000000" || -z "${HOSTID}" ]]; then
-    log_error "Failed to read synchronized hostid from /mnt/etc/hostid (HOSTID=${HOSTID})"
-    log_error "Target hostid file may be missing or corrupted"
-    exit 1
-fi
-log_info "Using synchronized hostid for ZFS configuration: ${HOSTID}"
+# Create ZFS configuration - hostid will be set properly at end of installation
+log_info "Creating ZFS configuration (hostid will be synchronized from pools at completion)"
 
-if ! setup_zfs_config "${HOSTID}"; then
+# Get current installer hostid for temporary ZFS config
+INSTALLER_HOSTID=$(hostid)
+if ! setup_zfs_config "${INSTALLER_HOSTID}"; then
     log_error "Failed to setup ZFS configuration"
     exit 1
 fi
@@ -2442,16 +2347,40 @@ if ! create_recovery_guide; then
     exit 1
 fi
 
-# Final validation: verify target system hostid matches ZFS pool hostid
-# Read hostid directly from file (more reliable than chroot hostid command)
-if [[ -f "/mnt/etc/hostid" ]]; then
-    TARGET_HOSTID=$(printf "%08x" "$(hexdump -e '1/4 "%u"' /mnt/etc/hostid)" 2>/dev/null || echo "failed")
-else
-    TARGET_HOSTID="failed"
+# Final step: Read actual pool hostid and set target system to match
+# This eliminates synchronization timing issues by matching target to pools
+log_info "Setting target system hostid to match ZFS pools..."
+
+# Get the actual hostid from the pools using device path
+POOL_DEVICE="${DRIVE1_ID}-part4"
+ACTUAL_POOL_HOSTID_DECIMAL=$(zdb -l "/dev/disk/by-id/${POOL_DEVICE}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
+
+if [[ -z "${ACTUAL_POOL_HOSTID_DECIMAL}" || ! "${ACTUAL_POOL_HOSTID_DECIMAL}" =~ ^[0-9]+$ ]]; then
+    log_error "Failed to read hostid from pool device ${POOL_DEVICE}"
+    log_error "Cannot set target system hostid to match pools"
+    exit 1
 fi
 
+# Convert decimal to hex and create binary hostid file
+ACTUAL_POOL_HOSTID_HEX=$(printf "%08x" "${ACTUAL_POOL_HOSTID_DECIMAL}")
+log_info "Pool hostid: ${ACTUAL_POOL_HOSTID_DECIMAL} (0x${ACTUAL_POOL_HOSTID_HEX})"
+
+# Write the hostid in binary format to target system
+printf "%08x" "${ACTUAL_POOL_HOSTID_DECIMAL}" | xxd -r -p > /mnt/etc/hostid
+
+# Verify the hostid file was written correctly
+TARGET_HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
+if [[ -n "${TARGET_HOSTID_RAW}" && "${TARGET_HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
+    TARGET_HOSTID="${TARGET_HOSTID_RAW}"
+    log_info "Target system hostid set to: ${TARGET_HOSTID}"
+else
+    log_error "Failed to write hostid file to target system"
+    exit 1
+fi
+
+# Final validation: verify target hostid matches pool hostid
 if ! validate_pool_hostid "at completion" "${TARGET_HOSTID}"; then
-    log_error "Final hostid validation failed - installation may have issues on first boot"
+    log_error "Final hostid validation failed - target system hostid does not match pools"
     log_error "Target system hostid: ${TARGET_HOSTID}"
     exit 1
 fi
