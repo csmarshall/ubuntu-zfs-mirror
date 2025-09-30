@@ -25,7 +25,8 @@ Based on git commit analysis of the script evolution.
 | Sep 29, 2025 | 13a2886 | **Bugfix** | +15, -8 | v4.2.4 - Fixed zdb hostid validation for active pools |
 | Sep 29, 2025 | 9dd6428 | **Bugfix** | +1, -0 | hostid var fix |
 | Sep 29, 2025 | 15359f8 | **Bugfix** | +3, -3 | v4.2.5 - Fixed hostid hex formatting with leading zeros |
-| Sep 29, 2025 | Working | **Critical Fix** | +6, -2 | v4.2.6 - Fixed chroot hostid reading to use synchronized file |
+| Sep 29, 2025 | 9490133 | **Critical Fix** | +6, -2 | v4.2.6 - Fixed chroot hostid reading to use synchronized file |
+| Sep 30, 2025 | Working | **Critical Fix** | +17, -5 | v4.2.7 - Fixed hostid generation timing bug causing pool validation failures |
 
 ## Major Phases
 
@@ -115,6 +116,10 @@ Based on git commit analysis of the script evolution.
 - **Started**: Large monolithic script
 - **Evolved**: Cleaner, more maintainable code
 - **Current**: Production-ready with comprehensive error handling
+
+### Recent Critical Fixes (Sep 29-30)
+- **v4.2.6**: Fixed chroot hostid reading synchronization
+- **v4.2.7**: Fixed hostid generation timing bug that caused pool validation failures
 
 ### Recent Improvements (Sep 26)
 - Enhanced first boot reliability

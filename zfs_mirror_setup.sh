@@ -1769,8 +1769,26 @@ log_info "Original installer hostid: ${ORIGINAL_HOSTID}"
 # Generate new hostid for this installation
 log_info "Generating new hostid for this ZFS installation..."
 zgenhostid -f
+
+# Wait for hostid to take effect and verify it's changed
+sleep 1
 HOSTID=$(hostid)
+NEW_HOSTID_CHECK=$(hostid)
+
+# Ensure hostid actually changed from original
+if [[ "${HOSTID}" == "${ORIGINAL_HOSTID}" ]]; then
+    log_error "Hostid generation failed - hostid unchanged: ${HOSTID}"
+    exit 1
+fi
+
+# Double-check hostid consistency
+if [[ "${HOSTID}" != "${NEW_HOSTID_CHECK}" ]]; then
+    log_error "Hostid inconsistent after generation: ${HOSTID} vs ${NEW_HOSTID_CHECK}"
+    exit 1
+fi
+
 log_info "Generated new hostid: ${HOSTID}"
+log_info "Hostid verification passed - proceeding with pool creation"
 
 # Create ZFS pools with consolidated logic
 if ! create_zfs_pools "${PART1_BOOT}" "${PART2_BOOT}" "${PART1_ROOT}" "${PART2_ROOT}" "${ASHIFT}" "${TRIM_ENABLED}"; then

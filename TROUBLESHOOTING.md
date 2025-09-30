@@ -14,17 +14,63 @@
 **Root Cause:**
 Hostid mismatch between installer environment and target system. ZFS pools are created with installer USB hostid but target system boots with different hostid.
 
-**Solution (Implemented v4.2.0):**
+**Solution (Implemented v4.2.0, Fixed v4.2.7):**
 - **Hostid synchronization:** Generate unique hostid before pool creation
 - **Perfect alignment:** Same hostid used by installer and target system
 - **Pre-boot verification:** Validate pools have correct hostid before reboot
 - **Clean imports:** No force flags or cleanup complexity needed
+- **Timing validation (v4.2.7):** Added verification that hostid generation actually takes effect
 
 **Technical Details:**
 - **Before:** Pools created with random installer hostid, complex cleanup system needed
 - **After:** Hostid generated and synchronized, pools import cleanly
 - **Legacy approach:** First-boot cleanup system (removed in v4.2.0)
 - **New approach:** Bulletproof hostid alignment eliminates all force flag requirements
+- **v4.2.7 Fix:** Added timing checks to ensure `zgenhostid -f` actually changes the hostid before pool creation
+
+### Hostid Generation Timing Issues (Fixed v4.2.7)
+
+**Symptoms:**
+- Installation fails with: `Pool hostid validation FAILED at completion`
+- Error shows: `Expected: 0d31d8fd, got rpool: 127e115a, bpool: 127e115a`
+- Pools have old hostid instead of newly generated one
+
+**Root Cause:**
+Timing bug where `zgenhostid -f` generates new hostid but pools get created with old hostid before the change takes effect.
+
+**Fix Applied (v4.2.7):**
+```bash
+# Added validation after zgenhostid -f
+sleep 1
+HOSTID=$(hostid)
+NEW_HOSTID_CHECK=$(hostid)
+
+# Ensure hostid actually changed
+if [[ "${HOSTID}" == "${ORIGINAL_HOSTID}" ]]; then
+    log_error "Hostid generation failed - hostid unchanged: ${HOSTID}"
+    exit 1
+fi
+
+# Double-check consistency
+if [[ "${HOSTID}" != "${NEW_HOSTID_CHECK}" ]]; then
+    log_error "Hostid inconsistent after generation"
+    exit 1
+fi
+```
+
+**Manual Recovery (if using old script):**
+```bash
+# Export pools
+zpool export rpool bpool
+
+# Set correct hostid and re-import
+echo -ne '\x0d\x31\xd8\xfd' > /etc/hostid
+zpool import -f rpool
+zpool import -f bpool
+
+# Update target system
+echo -ne '\x0d\x31\xd8\xfd' > /mnt/etc/hostid
+```
 
 ### Quick Fixes
 
