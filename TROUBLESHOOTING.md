@@ -132,6 +132,42 @@ echo "Synchronized hostid: ${HOSTID}"
 cmp /etc/hostid /mnt/etc/hostid && echo "Files match" || echo "Files differ"
 ```
 
+#### Malformed Od Command Causing Concatenation Errors (Fixed v4.2.10)
+
+**Symptoms:**
+- Log shows hostid like: `00000612failed` or `Using synchronized hostid for ZFS configuration: 00000612failed`
+- Validation fails with malformed hostid containing "failed" text
+- Od command works but error handling concatenates output incorrectly
+
+**Root Cause:**
+The `printf` command structure was malformed, causing partial od output to concatenate with error handling text.
+
+**Fix Applied (v4.2.10):**
+```bash
+# Changed from (broken):
+HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /mnt/etc/hostid | tr -d ' ')" || echo "failed")
+
+# To (fixed):
+HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
+if [[ -n "${HOSTID_RAW}" && "${HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
+    HOSTID="${HOSTID_RAW}"
+else
+    HOSTID="failed"
+fi
+```
+
+**Manual Fix (if using old script):**
+```bash
+# Test the od command properly
+HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
+echo "Raw hostid: '${HOSTID_RAW}'"
+if [[ "${HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
+    echo "Valid hostid: ${HOSTID_RAW}"
+else
+    echo "Invalid or failed hostid read"
+fi
+```
+
 ### Quick Fixes
 
 **Emergency Force Import:**
@@ -215,7 +251,19 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **4.2.5** (as of 2025-09-29)
+- Current version: **4.2.10** (as of 2025-09-30)
+
+**⚠️ CRITICAL: Version Synchronization Required**
+When updating version numbers, you **MUST** update ALL of these locations:
+1. `zfs_mirror_setup.sh` - Line 6 (comment) and Line 14 (VERSION variable)
+2. `README.md` - Technical Specifications section
+3. `TROUBLESHOOTING.md` - This section (current version)
+4. `CHANGELOG.md` - Timeline and Recent Fixes sections
+
+Use this command to verify synchronization:
+```bash
+grep -r "4\.[0-9]\+\.[0-9]\+" *.{sh,md} | grep -E "(Version|version|Script Version)"
+```
 
 ### AI Assistant Guidelines
 
@@ -223,7 +271,8 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
 1. **Before making changes**: Read existing documentation to understand context
 2. **While making changes**: Note what documentation needs updating
 3. **After making changes**: Update ALL relevant documentation files
-4. **Never skip documentation**: Even small fixes require changelog entries
+4. **Version changes**: Update ALL 4 version locations (see critical warning above)
+5. **Never skip documentation**: Even small fixes require changelog entries
 
 **Quality Standards:**
 - Test thoroughly (changes affect bootability and data integrity)

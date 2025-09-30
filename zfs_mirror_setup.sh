@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.2.6 - BUGFIX: Fixed chroot hostid reading to use synchronized file instead of hostid command
+# Version: 4.2.10 - BUGFIX: Fixed malformed od command causing hostid concatenation errors
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.2.5"
+readonly VERSION="4.2.10"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2063,7 +2063,12 @@ fi
 # Hostid already generated and synchronized earlier in the process
 # Read from the synchronized hostid file instead of hostid command (we're in chroot)
 # Use od instead of hexdump since hexdump might not be available in chroot
-HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /etc/hostid 2>/dev/null | tr -d ' ')" 2>/dev/null || echo "failed")
+HOSTID_RAW=$(od -An -tx4 -N4 /etc/hostid 2>/dev/null | tr -d ' ')
+if [[ -n "${HOSTID_RAW}" && "${HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
+    HOSTID="${HOSTID_RAW}"
+else
+    HOSTID="failed"
+fi
 if [[ "${HOSTID}" == "failed" || "${HOSTID}" == "00000000" ]]; then
     log_error "Failed to read synchronized hostid from /etc/hostid (HOSTID=${HOSTID})"
     log_error "hexdump/od may not be available in chroot environment"
@@ -2195,7 +2200,12 @@ show_progress 9 10 "Finalizing installation..."
 
 # Read hostid from the synchronized file instead of using chroot hostid command
 # The chroot hostid command generates new random hostids instead of reading the file
-HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')" 2>/dev/null || echo "failed")
+HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
+if [[ -n "${HOSTID_RAW}" && "${HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
+    HOSTID="${HOSTID_RAW}"
+else
+    HOSTID="failed"
+fi
 if [[ "${HOSTID}" == "failed" || "${HOSTID}" == "00000000" || -z "${HOSTID}" ]]; then
     log_error "Failed to read synchronized hostid from /mnt/etc/hostid (HOSTID=${HOSTID})"
     log_error "Target hostid file may be missing or corrupted"

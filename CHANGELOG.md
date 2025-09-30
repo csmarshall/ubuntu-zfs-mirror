@@ -29,6 +29,7 @@ Based on git commit analysis of the script evolution.
 | Sep 30, 2025 | abc1234 | **Critical Fix** | +17, -5 | v4.2.7 - Fixed hostid generation timing bug causing pool validation failures |
 | Sep 30, 2025 | def5678 | **Critical Fix** | +8, -3 | v4.2.8 - Fixed missing hexdump in chroot causing hostid synchronization failures |
 | Sep 30, 2025 | Working | **Critical Fix** | +7, -5 | v4.2.9 - Fixed chroot hostid command generating random hostids instead of using synchronized file |
+| Sep 30, 2025 | Working | **Critical Fix** | +12, -2 | v4.2.10 - Fixed malformed od command causing hostid concatenation errors |
 
 ## Major Phases
 
@@ -124,6 +125,7 @@ Based on git commit analysis of the script evolution.
 - **v4.2.7**: Fixed hostid generation timing bug that caused pool validation failures
 - **v4.2.8**: Fixed missing hexdump in chroot causing hostid synchronization failures
 - **v4.2.9**: Fixed chroot hostid command generating random hostids instead of using synchronized file
+- **v4.2.10**: Fixed malformed od command causing hostid concatenation errors
 
 ### Recent Improvements (Sep 26)
 - Enhanced first boot reliability
