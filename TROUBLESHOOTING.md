@@ -38,9 +38,9 @@ Hostid mismatch between installer environment and target system. ZFS pools are c
 **Root Cause:**
 Timing bug where `zgenhostid -f` generates new hostid but pools get created with old hostid before the change takes effect.
 
-**Fix Applied (v4.2.7):**
+**Fix Applied (v4.2.7-v4.2.8):**
 ```bash
-# Added validation after zgenhostid -f
+# v4.2.7: Added validation after zgenhostid -f
 sleep 1
 HOSTID=$(hostid)
 NEW_HOSTID_CHECK=$(hostid)
@@ -56,6 +56,10 @@ if [[ "${HOSTID}" != "${NEW_HOSTID_CHECK}" ]]; then
     log_error "Hostid inconsistent after generation"
     exit 1
 fi
+
+# v4.2.8: Install util-linux in chroot and improve hostid reading
+apt-get install --yes util-linux  # Ensures hexdump is available
+HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /etc/hostid | tr -d ' ')" || echo "failed")
 ```
 
 **Manual Recovery (if using old script):**
@@ -70,6 +74,31 @@ zpool import -f bpool
 
 # Update target system
 echo -ne '\x0d\x31\xd8\xfd' > /mnt/etc/hostid
+```
+
+### Missing hexdump in Chroot Environment (Fixed v4.2.8)
+
+**Symptoms:**
+- Log shows: `/tmp/configure_system.sh: line 134: hexdump: command not found`
+- Hostid validation shows: `Using previously generated hostid for ZFS: 00000000`
+- Installation fails later with pool hostid mismatch
+
+**Root Cause:**
+The `hexdump` command was not available in the chroot environment, causing hostid reading to fail and fall back to generating a new random hostid.
+
+**Fix Applied (v4.2.8):**
+- Install `util-linux` package in chroot (contains hexdump)
+- Use `od` as backup method for reading hostid file
+- Better error detection for failed hostid reads
+
+**Manual Fix (if using old script):**
+```bash
+# Install util-linux in chroot
+chroot /mnt apt-get install --yes util-linux
+
+# Or use od to read hostid file manually
+HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /etc/hostid | tr -d ' ')")
+echo "Current hostid: ${HOSTID}"
 ```
 
 ### Quick Fixes

@@ -1973,7 +1973,8 @@ apt-get install --yes \
     htop \
     software-properties-common \
     systemd-timesyncd \
-    cron
+    cron \
+    util-linux
 
 # Create EFI filesystems with identical volume IDs
 apt-get install --yes dosfstools
@@ -2061,9 +2062,11 @@ fi
 
 # Hostid already generated and synchronized earlier in the process
 # Read from the synchronized hostid file instead of hostid command (we're in chroot)
-HOSTID=$(printf "%08x" "$(hexdump -e '1/4 "%u"' /etc/hostid)" 2>/dev/null || echo "failed")
-if [[ "${HOSTID}" == "failed" ]]; then
-    log_error "Failed to read synchronized hostid from /etc/hostid"
+# Use od instead of hexdump since hexdump might not be available in chroot
+HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /etc/hostid 2>/dev/null | tr -d ' ')" 2>/dev/null || echo "failed")
+if [[ "${HOSTID}" == "failed" || "${HOSTID}" == "00000000" ]]; then
+    log_error "Failed to read synchronized hostid from /etc/hostid (HOSTID=${HOSTID})"
+    log_error "hexdump/od may not be available in chroot environment"
     exit 1
 fi
 log_info "Using previously generated hostid for ZFS: ${HOSTID}"
