@@ -2279,13 +2279,18 @@ DRIVES=()
 for pool in bpool rpool; do
     if zpool status "$pool" &>/dev/null; then
         while IFS= read -r drive; do
-            if [[ "$drive" =~ ^(/dev/disk/by-id/.*)-part[0-9]+$ ]]; then
-                base_drive="${BASH_REMATCH[1]}"
+            if [[ "$drive" =~ ^(.*)-part[0-9]+$ ]]; then
+                # Add /dev/disk/by-id/ prefix if not present
+                if [[ "$drive" =~ ^/dev/disk/by-id/ ]]; then
+                    base_drive="${BASH_REMATCH[1]}"
+                else
+                    base_drive="/dev/disk/by-id/${BASH_REMATCH[1]}"
+                fi
                 if [[ ! " ${DRIVES[*]} " =~ " ${base_drive} " ]]; then
                     DRIVES+=("$base_drive")
                 fi
             fi
-        done < <(zpool status "$pool" | grep -E '^[[:space:]]+/dev/disk/by-id/.*-part[0-9]+' | awk '{print $1}')
+        done < <(zpool status "$pool" | grep -E '^[[:space:]]+.*-part[0-9]+' | awk '{print $1}')
     fi
 done
 
@@ -2485,7 +2490,12 @@ log_info "Wiping replacement drive: $REPLACEMENT_DRIVE"
 sgdisk --zap-all "$REPLACEMENT_DRIVE"
 
 # Copy partition table from a working drive
-WORKING_DRIVE=$(zpool status rpool | grep -E '^[[:space:]]+/dev/disk/by-id/.*-part[0-9]+' | grep ONLINE | head -1 | awk '{print $1}' | sed 's/-part[0-9]*$//')
+WORKING_DRIVE_RAW=$(zpool status rpool | grep -E '^[[:space:]]+.*-part[0-9]+' | grep ONLINE | head -1 | awk '{print $1}' | sed 's/-part[0-9]*$//')
+if [[ "$WORKING_DRIVE_RAW" =~ ^/dev/disk/by-id/ ]]; then
+    WORKING_DRIVE="$WORKING_DRIVE_RAW"
+else
+    WORKING_DRIVE="/dev/disk/by-id/$WORKING_DRIVE_RAW"
+fi
 if [[ -z "$WORKING_DRIVE" ]]; then
     log_error "Could not find a working drive to copy partition table from"
     echo -e "${RED}Error: Could not find a working drive to copy partition table from${NC}"

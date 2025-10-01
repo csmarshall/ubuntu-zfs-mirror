@@ -1,5 +1,34 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.0.1 - BUGFIX: Fixed EFI sync and GRUB sync issues (2025-10-01)
+
+**Critical Bug Fixes for Production Stability**
+
+Fixed multiple critical issues discovered during installation testing that prevented proper EFI partition syncing and GRUB installation on mirror drives.
+
+**Major Fixes:**
+- FIXED: EFI sync deleting boot files instead of properly syncing between drives
+- FIXED: GRUB sync failing to detect ZFS mirror drives from zpool status
+- ADDED: man-db package to base installation for documentation access
+- ENHANCED: Improved regex patterns for device path handling
+
+**Technical Details:**
+- **EFI Sync**: Replaced broken `rsync --delete` with smart folder-aware sync logic
+- **EFI Sync**: Preserves drive-specific Ubuntu folder names while syncing contents
+- **GRUB Sync**: Fixed regex to handle zpool status output format (no /dev/disk/by-id/ prefix)
+- **GRUB Sync**: Added logic to reconstruct full device paths from zpool device names
+- **Drive Replacement**: Applied same device path fixes for consistency
+
+**User Impact:**
+- Eliminates "No ZFS mirror drives found" GRUB sync failures
+- Prevents EFI partition corruption that made mirror drives unbootable
+- Ensures both drives maintain proper UEFI boot entries with distinct names
+- Provides man page access in base installation
+
+**Git Hash**: [To be updated after commit]
+
+---
+
 ## v5.0.0 - MAJOR: Simplified First-Boot Force Import with Enhanced Safety Features (2025-10-01)
 
 **Simplified Approach: Replaced Complex Hostid Synchronization + Added Safety Features**
