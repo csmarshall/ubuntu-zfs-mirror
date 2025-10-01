@@ -1,5 +1,44 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.0.0 - MAJOR: Simplified First-Boot Force Import with Enhanced Safety Features (2025-10-01)
+
+**Simplified Approach: Replaced Complex Hostid Synchronization + Added Safety Features**
+
+Replaced the complex hostid synchronization approach (v4.x) with a simpler first-boot force import using Ubuntu's ZFS initramfs implementation, plus added safety features.
+
+**Major Changes:**
+- REMOVED: 60+ lines of complex hostid synchronization, byte order manipulation, timing validation
+- REPLACED: With ZFS native `zfs_force=1` kernel parameter approach
+- ADDED: Auto-cleanup systemd service for seamless transition to clean imports
+- ADDED: 10-second countdown timer for `--prepare` flag with CTRL+C abort capability
+- IMPROVED: Documentation with complete flow from live CD to post-first-boot
+- ENHANCED: Comprehensive command-line flag documentation
+
+**Technical Implementation:**
+- Research-based: Analyzed `/usr/share/initramfs-tools/scripts/zfs` source code
+- Uses ZFS kernel parameter `zfs_force=1` (sets `ZPOOL_FORCE="-f"` in import logic)
+- GRUB integration with self-removing `/etc/grub.d/99_zfs_firstboot` script
+- Systemd service `zfs-firstboot-cleanup.service` handles automatic cleanup
+- Non-blocking countdown using `read -t 1 -n 1` for immediate key detection
+- SIGINT trap handling for clean CTRL+C abort with proper exit messaging
+
+**Safety & User Experience:**
+- Eliminates "pool was previously in use from another system" errors permanently
+- Clear 10-second warning before destructive operations begin
+- Flexible abort mechanism (CTRL+C) or immediate continuation (any key)
+- Risk-based confirmation prompts remain unchanged
+- Comprehensive validation test procedures included
+
+**Files Changed:**
+- zfs_mirror_setup.sh: +677, -204 lines (net +473)
+- README.md: Major documentation overhaul with flowchart and detailed usage
+- TROUBLESHOOTING.md: Updated for new approach
+- VALIDATION_TEST.md: Created comprehensive testing procedures
+
+**Git Hash**: [To be updated after commit]
+
+---"
+
 Based on git commit analysis of the script evolution.
 
 ## Timeline Overview

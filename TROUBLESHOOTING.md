@@ -12,42 +12,50 @@
 - Clean import failures on first boot
 
 **Root Cause:**
-Hostid mismatch between installer environment and target system. ZFS pools are created with installer USB hostid but target system boots with different hostid.
+Hostid mismatch between installer environment and target system. ZFS pools are created with one hostid but target system boots with a different hostid.
 
-**Solution (Implemented v4.2.0, Fixed v4.2.7):**
-- **Hostid synchronization:** Generate unique hostid before pool creation
-- **Perfect alignment:** Same hostid used by installer and target system
-- **Pre-boot verification:** Validate pools have correct hostid before reboot
-- **Clean imports:** No force flags or cleanup complexity needed
-- **Timing validation (v4.2.7):** Added verification that hostid generation actually takes effect
+**Solution (v5.0.0 - Simplified Approach):**
+- **First-boot force import:** Uses ZFS kernel parameter `zfs_force=1` for guaranteed first boot
+- **ZFS native integration:** Leverages built-in ZFS initramfs force import support
+- **Auto-cleanup:** Systemd service automatically removes force configuration after successful boot
+- **Clean subsequent boots:** Future boots use standard imports without force flags
+- **No complex synchronization:** Eliminates hostid manipulation entirely
+
+**Technical Implementation:**
+- **Kernel parameter:** `zfs_force=1` sets `ZPOOL_FORCE="-f"` in ZFS initramfs
+- **GRUB integration:** Custom script adds force parameter only for first boot
+- **Auto-removal:** `/etc/grub.d/99_zfs_firstboot` script self-destructs after first boot
+- **Service cleanup:** `zfs-firstboot-cleanup.service` removes all force configuration
+- **Fail-safe design:** If cleanup fails, system continues to boot normally
+
+### Manual Recovery Instructions (v5.0.0)
+
+**If First Boot Fails (Rare):**
+If the automatic force import somehow fails, you can manually import:
+
+```bash
+# From initramfs prompt:
+zpool import -f rpool
+zpool import -f bpool
+exit
+```
+
+**Manual Cleanup (If Needed):**
+If you need to manually remove the first-boot configuration:
+
+```bash
+# Remove first-boot marker and GRUB script
+sudo rm -f /.zfs-force-import-firstboot
+sudo rm -f /etc/grub.d/99_zfs_firstboot
+sudo update-grub
+sudo systemctl disable zfs-firstboot-cleanup.service
+```
 
 **Technical Details:**
-- **Before:** Pools created with random installer hostid, complex cleanup system needed
-- **After:** Hostid generated and synchronized, pools import cleanly
-- **Legacy approach:** First-boot cleanup system (removed in v4.2.0)
-- **New approach:** Bulletproof hostid alignment eliminates all force flag requirements
-- **v4.2.7 Fix:** Added timing checks to ensure `zgenhostid -f` actually changes the hostid before pool creation
-
-### Hostid Generation Timing Issues (Fixed v4.2.7)
-
-**Symptoms:**
-- Installation fails with: `Pool hostid validation FAILED at completion`
-- Error shows: `Expected: 0d31d8fd, got rpool: 127e115a, bpool: 127e115a`
-- Pools have old hostid instead of newly generated one
-
-**Root Cause:**
-Timing bug where `zgenhostid -f` generates new hostid but pools get created with old hostid before the change takes effect.
-
-**Fix Applied (v4.2.7-v4.2.8):**
-```bash
-# v4.2.7: Added validation after zgenhostid -f
-sleep 1
-HOSTID=$(hostid)
-NEW_HOSTID_CHECK=$(hostid)
-
-# Ensure hostid actually changed
-if [[ "${HOSTID}" == "${ORIGINAL_HOSTID}" ]]; then
-    log_error "Hostid generation failed - hostid unchanged: ${HOSTID}"
+- **Force parameter source:** Found in `/usr/share/initramfs-tools/scripts/zfs` line 860-862
+- **Kernel cmdline pattern:** `(zfs_force|zfs.force|zfsforce)=(on|yes|1)`
+- **Import logic:** Line 245: `${ZPOOL} import -N ${ZPOOL_FORCE} ${ZPOOL_IMPORT_OPTS}`
+- **Auto-detection:** Script analyzes actual ZFS initramfs code for real variables
     exit 1
 fi
 

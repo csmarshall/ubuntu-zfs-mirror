@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 4.3.1 - ENHANCED: Implemented rpool-authoritative hostid synchronization with auto-recovery
+# Version: 5.0.0 - MAJOR: Simplified first-boot force import with countdown timer for --prepare flag
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="4.3.1"
+readonly VERSION="5.0.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -78,6 +78,43 @@ show_progress() {
 # ============================================================================
 # UTILITY FUNCTIONS - All helper functions defined up front
 # ============================================================================
+
+# Countdown timer with CTRL+C abort capability
+countdown_timer() {
+    local seconds=${1:-10}
+    local message=${2:-"Operation will begin"}
+
+    echo ""
+    echo -e "${YELLOW}${BOLD}⚠️  ${message} in ${seconds} seconds${NC}"
+    echo -e "${BOLD}Press CTRL+C to cancel or any key to continue immediately...${NC}"
+    echo ""
+
+    # Set up trap to catch CTRL+C
+    trap 'echo -e "\n${GREEN}Operation cancelled by user${NC}"; exit 0' INT
+
+    local original_seconds=$seconds
+    while [[ $seconds -gt 0 ]]; do
+        printf "\r${BOLD}Starting in: %2d seconds... ${NC}" "$seconds"
+
+        # Check if user pressed any key (non-blocking)
+        if read -t 1 -n 1 key 2>/dev/null; then
+            echo ""
+            echo -e "${GREEN}Continuing immediately...${NC}"
+            echo ""
+            break
+        fi
+
+        ((seconds--))
+    done
+
+    if [[ $seconds -eq 0 ]]; then
+        printf "\r${BOLD}Starting now...                    ${NC}\n"
+        echo ""
+    fi
+
+    # Reset trap
+    trap - INT
+}
 
 # Get all possible partition paths for a disk
 get_all_partitions() {
@@ -222,54 +259,6 @@ perform_basic_zfs_cleanup() {
     log_info "ZFS cleanup completed for ${pool_name}"
 }
 
-# Validate that ZFS pools have the correct hostid
-validate_pool_hostid() {
-    local context="$1"  # Description of when this validation is running
-    local expected_hostid="$2"  # Expected hostid value
-
-    log_info "Performing hostid validation ${context}..."
-
-    # Read hostid directly from device labels (works with active pools)
-    local rpool_hostid_decimal=$(zdb -l "${PART1_ROOT}" 2>/dev/null | grep -E '^\s*hostid:' | head -1 | awk '{print $2}' || echo "unknown")
-    local bpool_hostid_decimal=$(zdb -l "${PART1_BOOT}" 2>/dev/null | grep -E '^\s*hostid:' | head -1 | awk '{print $2}' || echo "unknown")
-
-    # Convert decimal hostids to hex for comparison (8-digit format with leading zeros)
-    local rpool_hostid="unknown"
-    local bpool_hostid="unknown"
-    if [[ "${rpool_hostid_decimal}" != "unknown" && "${rpool_hostid_decimal}" =~ ^[0-9]+$ ]]; then
-        rpool_hostid=$(printf "%08x" "${rpool_hostid_decimal}")
-    fi
-    if [[ "${bpool_hostid_decimal}" != "unknown" && "${bpool_hostid_decimal}" =~ ^[0-9]+$ ]]; then
-        bpool_hostid=$(printf "%08x" "${bpool_hostid_decimal}")
-    fi
-
-    # Convert our expected hostid to hex without 0x prefix (8-digit format)
-    local expected_hostid_hex=$(printf "%08x" "0x${expected_hostid}")
-
-    log_info "Hostid validation results:"
-    log_info "  Expected hostid: ${expected_hostid} (0x${expected_hostid_hex})"
-    log_info "  rpool hostid:    ${rpool_hostid} (decimal: ${rpool_hostid_decimal})"
-    log_info "  bpool hostid:    ${bpool_hostid} (decimal: ${bpool_hostid_decimal})"
-
-    # Verify both pools have correct hostid
-    if [[ "${rpool_hostid}" == "${expected_hostid_hex}" && "${bpool_hostid}" == "${expected_hostid_hex}" ]]; then
-        log_info "✓ Pool hostid validation PASSED ${context}"
-        log_info "✓ Both pools have correct hostid - ZFS import will be clean"
-        return 0
-    else
-        log_error "✗ Pool hostid validation FAILED ${context}!"
-        log_error "  This will cause 'pool was previously in use from another system' errors"
-        log_error "  Expected: ${expected_hostid_hex}, got rpool: ${rpool_hostid}, bpool: ${bpool_hostid}"
-
-        # Debug info to help troubleshoot
-        log_error "Debug info:"
-        zpool status 2>/dev/null || log_error "  No pools found"
-        log_error "  rpool device: ${PART1_ROOT}"
-        log_error "  bpool device: ${PART1_BOOT}"
-
-        return 1
-    fi
-}
 
 # Stop services using a disk with comprehensive checks
 stop_disk_services() {
@@ -1225,9 +1214,9 @@ ZFS_DEFAULTS_EOF
 
 # Create simplified EFI sync script
 create_efi_sync_script() {
-    cat << 'EFI_SYNC_SCRIPT' > /mnt/usr/local/bin/sync-efi-partitions
+    cat << EFI_SYNC_SCRIPT > /mnt/usr/local/bin/sync-efi-partitions
 #!/bin/bash
-# Simplified EFI Sync - Both partitions have identical UUIDs
+# EFI Partition Sync Script for ZFS Mirror Drives\n# \n# CREATED BY: Ubuntu ZFS Mirror Root Installation Script (v${VERSION})\n# PURPOSE: Sync EFI partitions between mirror drives with identical UUIDs\n# LOCATION: /usr/local/bin/sync-efi-partitions\n# \n# This script automatically syncs the EFI System Partition content between\n# mirror drives. It runs automatically after kernel updates via APT hooks.\n#
 set -euo pipefail
 
 log_message() {
@@ -1359,10 +1348,15 @@ create_zfs_pools() {
 
     # Configure pools for bulletproof Ubuntu 24.04 import
     # Set cachefile=none for both pools to avoid cache file issues
+    #
+    # Ubuntu Bug Reference: https://bugs.launchpad.net/ubuntu/+source/zfs-linux/+bug/1718761
+    # Cache files can become corrupted or inconsistent in Ubuntu, causing import failures
+    # Using cachefile=none forces scan-based import which is more reliable
+    # This works with zfs-import-scan.service in Ubuntu 24.04
     log_info "Configuring pools for reliable import..."
     zpool set cachefile=none bpool
     zpool set cachefile=none rpool
-    log_info "Pools configured with cachefile=none for scan-based import"
+    log_info "Pools configured with cachefile=none for scan-based import (avoids Ubuntu cache file bug)"
 
     return 0
 }
@@ -1603,7 +1597,10 @@ fi
 if [[ "${USE_PREPARE}" == "true" ]]; then
     log_header "Preparing Drives (--prepare mode)"
     log_info "Performing complete wipe of both drives..."
-        
+
+    # Final countdown before destructive operations
+    countdown_timer 10 "Drive wipe will begin"
+
     # Stop all services first
     stop_disk_services "${DISK1}"
     stop_disk_services "${DISK2}"
@@ -2224,6 +2221,357 @@ TEST_SCRIPT
 
     chmod +x /mnt/usr/local/bin/test-zfs-mirror
     log_info "Post-install test script created: /usr/local/bin/test-zfs-mirror"
+
+# Create GRUB sync script for all ZFS mirror drives
+log_info "Creating GRUB sync script for mirror drives..."
+cat << 'GRUB_SYNC_SCRIPT' > /mnt/usr/local/bin/sync-grub-to-mirror-drives
+#!/bin/bash
+#
+# sync-grub-to-mirror-drives
+#
+# CREATED BY: Ubuntu ZFS Mirror Root Installation Script (v${VERSION})
+# PURPOSE: Install GRUB to all drives in the ZFS boot/root mirror for redundancy
+# LOCATION: /usr/local/bin/sync-grub-to-mirror-drives
+#
+# This script discovers all drives participating in the ZFS boot and root
+# pools and installs GRUB to each drive for full redundancy. It runs
+# automatically during installation and can be run manually for maintenance.
+#
+
+set -euo pipefail
+
+# Set up logging functions
+log_info() { logger -t "sync-grub-to-mirror-drives" -p user.info "$1"; echo "$1"; }
+log_error() { logger -t "sync-grub-to-mirror-drives" -p user.err "$1"; echo "ERROR: $1" >&2; }
+log_warning() { logger -t "sync-grub-to-mirror-drives" -p user.warning "$1"; echo "WARNING: $1"; }
+
+log_info "Syncing GRUB to all ZFS mirror drives..."
+
+# Discover drives from both bpool and rpool
+DRIVES=()
+for pool in bpool rpool; do
+    if zpool status "$pool" &>/dev/null; then
+        while IFS= read -r drive; do
+            if [[ "$drive" =~ ^(/dev/disk/by-id/.*)-part[0-9]+$ ]]; then
+                base_drive="${BASH_REMATCH[1]}"
+                if [[ ! " ${DRIVES[*]} " =~ " ${base_drive} " ]]; then
+                    DRIVES+=("$base_drive")
+                fi
+            fi
+        done < <(zpool status "$pool" | grep -E '^[[:space:]]+/dev/disk/by-id/.*-part[0-9]+' | awk '{print $1}')
+    fi
+done
+
+if [[ ${#DRIVES[@]} -eq 0 ]]; then
+    log_warning "No ZFS mirror drives found"
+    exit 1
+fi
+
+log_info "Found ${#DRIVES[@]} ZFS mirror drives:"
+for drive in "${DRIVES[@]}"; do
+    log_info "  - $drive"
+done
+
+# Install GRUB to each drive
+for drive in "${DRIVES[@]}"; do
+    log_info "Installing GRUB to $drive..."
+    if grub-install --target=x86_64-efi --efi-directory=/boot/efi "$drive" >/dev/null 2>&1; then
+        log_info "  ✓ GRUB installed successfully to $drive"
+    else
+        log_error "  ✗ Failed to install GRUB to $drive"
+    fi
+done
+
+log_info "GRUB sync complete"
+GRUB_SYNC_SCRIPT
+
+chmod +x /mnt/usr/local/bin/sync-grub-to-mirror-drives
+log_info "GRUB sync script created: /usr/local/bin/sync-grub-to-mirror-drives"
+
+# Document manual cleanup commands in recovery guide (no separate script needed)
+
+# Create drive replacement script
+log_info "Creating drive replacement script..."
+cat << 'REPLACE_DRIVE_SCRIPT' > /mnt/usr/local/bin/replace-drive-in-zfs-boot-mirror
+#!/bin/bash
+#
+# replace-drive-in-zfs-boot-mirror
+#
+# CREATED BY: Ubuntu ZFS Mirror Root Installation Script (v${VERSION})
+# PURPOSE: Replace a failed drive in the ZFS boot/root mirror
+# LOCATION: /usr/local/bin/replace-drive-in-zfs-boot-mirror
+#
+# This script automatically detects failed drives in the ZFS mirror and guides
+# you through replacing them with a new drive. It handles partitioning, pool
+# replacement using proper identifiers (GUIDs when needed), EFI synchronization,
+# and GRUB installation for complete drive replacement with full redundancy.
+#
+
+set -euo pipefail
+
+# Set up logging functions
+log_info() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.info "$1"; echo "$1"; }
+log_error() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.err "$1"; echo "ERROR: $1" >&2; }
+log_warning() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.warning "$1"; echo "WARNING: $1"; }
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+usage() {
+    echo "Usage: $0 <replacement_drive>"
+    echo "Example: $0 /dev/disk/by-id/ata-WDC_WD1234567890_NEWSERIAL"
+    echo ""
+    echo "This script will:"
+    echo "  1. Auto-detect failed drives in bpool and rpool"
+    echo "  2. Partition the replacement drive to match the mirror"
+    echo "  3. Replace failed drives using stable identifiers (GUIDs when needed)"
+    echo "  4. Reinstall GRUB and sync EFI partitions"
+    echo "  5. Wait for resilvering to complete"
+    echo ""
+    echo "Note: Use full /dev/disk/by-id/ path for replacement drive"
+    exit 1
+}
+
+if [[ $# -ne 1 ]]; then
+    usage
+fi
+
+REPLACEMENT_DRIVE="$1"
+
+# Verify replacement drive exists
+if [[ ! -b "$REPLACEMENT_DRIVE" ]]; then
+    log_error "Replacement drive $REPLACEMENT_DRIVE does not exist"
+    echo -e "${RED}Error: Replacement drive $REPLACEMENT_DRIVE does not exist${NC}"
+    exit 1
+fi
+
+log_info "Starting drive replacement: $REPLACEMENT_DRIVE"
+echo -e "${BLUE}Analyzing ZFS pool status for failed drives...${NC}"
+
+# Function to detect failed devices in a pool
+detect_failed_devices() {
+    local pool="$1"
+    local failed_devices=()
+
+    if ! zpool status "$pool" &>/dev/null; then
+        echo "Pool $pool not found"
+        return 1
+    fi
+
+    # Check for devices in failed states (NOT ONLINE or DEGRADED)
+    while IFS= read -r line; do
+        if [[ $line =~ ^[[:space:]]+([^[:space:]]+)[[:space:]]+(FAULTED|UNAVAIL|REMOVED|OFFLINE) ]]; then
+            device="${BASH_REMATCH[1]}"
+            state="${BASH_REMATCH[2]}"
+            failed_devices+=("$device:$state")
+            echo "  Found failed device: $device (state: $state)"
+        fi
+    done < <(zpool status -v "$pool")
+
+    # Also check for numeric GUIDs in failed states (indicates device path issues)
+    while IFS= read -r line; do
+        if [[ $line =~ ^[[:space:]]+([0-9]+)[[:space:]]+(FAULTED|UNAVAIL|REMOVED|OFFLINE) ]]; then
+            guid="${BASH_REMATCH[1]}"
+            state="${BASH_REMATCH[2]}"
+            # Check if this is actually a GUID (long number)
+            if [[ ${#guid} -gt 10 ]]; then
+                failed_devices+=("$guid:$state")
+                echo "  Found device with GUID: $guid (state: $state)"
+            fi
+        fi
+    done < <(zpool status -v "$pool")
+
+    printf '%s\n' "${failed_devices[@]}"
+}
+
+# Function to validate that resilvering has started successfully
+validate_resilvering_started() {
+    echo -e "${BLUE}Validating that resilvering has started...${NC}"
+
+    # Wait a moment for ZFS to begin resilvering
+    sleep 3
+
+    # Check if resilvering is active
+    if zpool status | grep -q "resilver\|replace"; then
+        echo -e "${GREEN}✓ Resilvering has started successfully${NC}"
+        echo ""
+        echo "Current status:"
+        zpool status
+        return 0
+    else
+        echo -e "${RED}✗ Resilvering does not appear to have started${NC}"
+        echo "Current pool status:"
+        zpool status
+        return 1
+    fi
+}
+
+# Detect failed devices in both pools
+echo "Checking bpool for failed devices..."
+BPOOL_FAILED=($(detect_failed_devices "bpool"))
+
+echo "Checking rpool for failed devices..."
+RPOOL_FAILED=($(detect_failed_devices "rpool"))
+
+if [[ ${#BPOOL_FAILED[@]} -eq 0 && ${#RPOOL_FAILED[@]} -eq 0 ]]; then
+    echo -e "${GREEN}No failed devices detected in either pool.${NC}"
+    echo ""
+    echo "Current pool status:"
+    zpool status
+    echo ""
+    echo -e "${YELLOW}${BOLD}Drive replacement is only allowed for failed drives.${NC}"
+    echo -e "${YELLOW}This safety check prevents accidentally replacing healthy drives.${NC}"
+    echo ""
+    echo -e "${YELLOW}If you need to replace a working drive for other reasons:${NC}"
+    echo -e "  1. Manually offline the drive: ${GREEN}zpool offline poolname device${NC}"
+    echo -e "  2. Then run this script again"
+    echo ""
+    exit 0
+fi
+
+echo ""
+echo -e "${RED}${BOLD}⚠️  SAFETY VERIFICATION ⚠️${NC}"
+echo -e "${YELLOW}The following drives will be replaced with ${BOLD}${REPLACEMENT_DRIVE}${NC}:"
+
+echo -e "${YELLOW}Failed devices summary:${NC}"
+if [[ ${#BPOOL_FAILED[@]} -gt 0 ]]; then
+    echo "  bpool: ${BPOOL_FAILED[*]}"
+fi
+if [[ ${#RPOOL_FAILED[@]} -gt 0 ]]; then
+    echo "  rpool: ${RPOOL_FAILED[*]}"
+fi
+
+echo -e "${RED}${BOLD}WARNING: This will completely wipe ${REPLACEMENT_DRIVE}${NC}"
+echo -e "${YELLOW}Press Enter to continue, or Ctrl+C to abort...${NC}"
+read -r
+
+echo -e "${BLUE}Step 1: Preparing replacement drive...${NC}"
+log_info "Step 1: Preparing replacement drive"
+
+# Wipe the replacement drive
+log_info "Wiping replacement drive: $REPLACEMENT_DRIVE"
+sgdisk --zap-all "$REPLACEMENT_DRIVE"
+
+# Copy partition table from a working drive
+WORKING_DRIVE=$(zpool status rpool | grep -E '^[[:space:]]+/dev/disk/by-id/.*-part[0-9]+' | grep ONLINE | head -1 | awk '{print $1}' | sed 's/-part[0-9]*$//')
+if [[ -z "$WORKING_DRIVE" ]]; then
+    log_error "Could not find a working drive to copy partition table from"
+    echo -e "${RED}Error: Could not find a working drive to copy partition table from${NC}"
+    exit 1
+fi
+
+log_info "Copying partition table from $WORKING_DRIVE to $REPLACEMENT_DRIVE"
+echo "Copying partition table from $WORKING_DRIVE to $REPLACEMENT_DRIVE"
+sgdisk "$WORKING_DRIVE" -R "$REPLACEMENT_DRIVE"
+sgdisk -G "$REPLACEMENT_DRIVE"
+
+echo -e "${BLUE}Step 2: Replacing failed drives in ZFS pools...${NC}"
+log_info "Step 2: Replacing failed drives in ZFS pools"
+
+# Replace in bpool if needed
+if [[ ${#BPOOL_FAILED[@]} -gt 0 ]]; then
+    log_info "Replacing failed device(s) in bpool: ${BPOOL_FAILED[*]}"
+    for failed_device_info in "${BPOOL_FAILED[@]}"; do
+        failed_device="${failed_device_info%:*}"
+        log_info "Attempting bpool replacement: $failed_device -> ${REPLACEMENT_DRIVE}-part2"
+        echo "Replacing $failed_device in bpool..."
+        if zpool replace bpool "$failed_device" "${REPLACEMENT_DRIVE}-part2"; then
+            log_info "bpool replacement initiated successfully"
+            echo "  ✓ bpool replacement initiated"
+            break
+        else
+            log_warning "bpool replacement failed for $failed_device"
+            echo "  ✗ bpool replacement failed, trying alternative method..."
+        fi
+    done
+fi
+
+# Replace in rpool if needed
+if [[ ${#RPOOL_FAILED[@]} -gt 0 ]]; then
+    log_info "Replacing failed device(s) in rpool: ${RPOOL_FAILED[*]}"
+    for failed_device_info in "${RPOOL_FAILED[@]}"; do
+        failed_device="${failed_device_info%:*}"
+        log_info "Attempting rpool replacement: $failed_device -> ${REPLACEMENT_DRIVE}-part3"
+        echo "Replacing $failed_device in rpool..."
+        if zpool replace rpool "$failed_device" "${REPLACEMENT_DRIVE}-part3"; then
+            log_info "rpool replacement initiated successfully"
+            echo "  ✓ rpool replacement initiated"
+            break
+        else
+            log_warning "rpool replacement failed for $failed_device"
+            echo "  ✗ rpool replacement failed, trying alternative method..."
+        fi
+    done
+fi
+
+echo -e "${BLUE}Step 3: Installing GRUB and syncing EFI...${NC}"
+log_info "Step 3: Installing GRUB and syncing EFI"
+
+# Format EFI partition
+log_info "Formatting EFI partition: ${REPLACEMENT_DRIVE}-part1"
+mkfs.fat -F32 "${REPLACEMENT_DRIVE}-part1"
+
+# Sync EFI partitions
+if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
+    log_info "Syncing EFI partitions using sync script"
+    echo "Syncing EFI partitions..."
+    /usr/local/bin/sync-efi-partitions
+else
+    log_warning "EFI sync script not found, manual EFI sync required"
+    echo -e "${YELLOW}Warning: EFI sync script not found, manual EFI sync required${NC}"
+fi
+
+# Install GRUB to replacement drive
+log_info "Installing GRUB to replacement drive: $REPLACEMENT_DRIVE"
+echo "Installing GRUB to replacement drive..."
+grub-install --target=x86_64-efi --efi-directory=/boot/efi "$REPLACEMENT_DRIVE"
+
+echo -e "${BLUE}Step 4: Validating drive replacement...${NC}"
+
+# Validate that resilvering started successfully
+if ! validate_resilvering_started; then
+    echo -e "${RED}Drive replacement may have failed. Please check the output above.${NC}"
+    exit 1
+fi
+
+echo ""
+echo -e "${GREEN}${BOLD}Drive replacement initiated successfully!${NC}"
+echo ""
+echo -e "${YELLOW}${BOLD}Resilvering is now in progress.${NC}"
+echo ""
+echo -e "${YELLOW}Monitor progress with:${NC}"
+echo -e "  ${GREEN}watch zpool status${NC}     # Live updates every 2 seconds"
+echo -e "  ${GREEN}zpool status${NC}           # Check current status"
+echo ""
+echo -e "${YELLOW}Resilvering will complete automatically in the background.${NC}"
+echo -e "${YELLOW}Your system remains fully functional during this process.${NC}"
+echo ""
+echo -e "${YELLOW}When resilvering completes:${NC}"
+echo -e "  • Pool status will show all drives as ONLINE"
+echo -e "  • No 'resilver' or 'replace' text in zpool status"
+echo -e "  • Both drives will be fully synchronized"
+echo ""
+echo -e "${GREEN}Final verification commands:${NC}"
+echo -e "  ${GREEN}zpool status${NC}                    # Verify all drives ONLINE"
+echo -e "  ${GREEN}sudo /usr/local/bin/test-zfs-mirror${NC}  # Test system integrity"
+echo ""
+
+# Clear any remaining errors
+log_info "Clearing pool errors"
+zpool clear bpool 2>/dev/null || true
+zpool clear rpool 2>/dev/null || true
+
+log_info "Drive replacement process completed successfully!"
+echo -e "${GREEN}Drive replacement process completed successfully!${NC}"
+REPLACE_DRIVE_SCRIPT
+
+chmod +x /mnt/usr/local/bin/replace-drive-in-zfs-boot-mirror
+log_info "Drive replacement script created: /usr/local/bin/replace-drive-in-zfs-boot-mirror"
 }
 
 if ! create_post_install_test; then
@@ -2296,6 +2644,9 @@ Check pool status:        sudo zpool status
 Check dataset usage:      sudo zfs list
 Test system:             sudo /usr/local/bin/test-zfs-mirror
 Sync EFI partitions:     sudo /usr/local/bin/sync-efi-partitions
+Sync GRUB to all drives: sudo /usr/local/bin/sync-grub-to-mirror-drives
+Replace failed drive:    sudo /usr/local/bin/replace-drive-in-zfs-boot-mirror /dev/disk/by-id/NEW-DRIVE
+Manual cleanup (if needed): sudo rm -f /.zfs-force-import-firstboot /etc/grub.d/99_zfs_firstboot && sudo update-grub
 Check boot entries:      efibootmgr
 
 Force import (emergency): sudo zpool import -f rpool && sudo zpool import -f bpool
@@ -2347,70 +2698,173 @@ if ! create_recovery_guide; then
     exit 1
 fi
 
-# Final step: Synchronize all hostids using rpool as authoritative source
-# rpool cannot be exported (actively in use), so it becomes the immutable source of truth
-log_info "Synchronizing hostids using rpool as authoritative source..."
+# ================================================================
+# FIRST-BOOT FORCE IMPORT CONFIGURATION
+# ================================================================
+# Instead of trying to synchronize hostids (which is complex and error-prone),
+# we configure the first boot to use 'zfs_force=1' kernel parameter.
+# This tells the ZFS initramfs to use 'zpool import -f' for reliable import.
+# After successful first boot, the system automatically removes this configuration
+# and future boots use clean imports without force flags.
 
-# Step 1: Read rpool hostid (authoritative source)
-RPOOL_HOSTID_DECIMAL=$(zdb -l "${PART1_ROOT}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
-if [[ -z "${RPOOL_HOSTID_DECIMAL}" || ! "${RPOOL_HOSTID_DECIMAL}" =~ ^[0-9]+$ ]]; then
-    log_error "Failed to read hostid from rpool device ${PART1_ROOT}"
-    log_error "Cannot proceed with hostid synchronization"
-    exit 1
-fi
+log_info "Configuring first-boot force import for reliable pool import..."
+log_info "This eliminates hostid synchronization complexity and ensures successful first boot"
 
-RPOOL_HOSTID_HEX=$(printf "%08x" "${RPOOL_HOSTID_DECIMAL}")
-log_info "rpool hostid (authoritative): ${RPOOL_HOSTID_DECIMAL} (0x${RPOOL_HOSTID_HEX})"
+# Create GRUB configuration that adds zfs_force=1 ONLY on first boot
+# The zfs_force=1 parameter tells ZFS initramfs to use 'zpool import -f'
+cat > /mnt/etc/grub.d/99_zfs_firstboot << 'EOF'
+#!/bin/sh
+# ZFS First-Boot Force Import Configuration
+# Adds zfs_force=1 to kernel command line for first boot only
+# After first successful boot, this script and configuration are automatically removed
 
-# Step 2: Set target system to match rpool
-python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${RPOOL_HOSTID_DECIMAL}))"
-TARGET_HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
-if [[ -n "${TARGET_HOSTID_RAW}" && "${TARGET_HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
-    log_info "✓ Target system hostid set to: ${TARGET_HOSTID_RAW}"
+if [ -f /.zfs-force-import-firstboot ]; then
+    cat << 'GRUB_EOF'
+# ZFS first-boot force import menu entry (auto-generated, auto-removed)
+menuentry 'Ubuntu (ZFS first boot - force import)' --class ubuntu --class gnu-linux --class gnu --class os $menuentry_id_option 'gnulinux-zfs-firstboot' {
+    recordfail
+    load_video
+    gfxmode $linux_gfx_mode
+    insmod gzio
+    if [ x$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+    insmod part_gpt
+    insmod zfs
+    # Force import pools using zfs_force=1 kernel parameter
+    linux   /vmlinuz root=ZFS=rpool/ROOT/ubuntu ro zfs_force=1 quiet splash
+    initrd  /initrd.img
+}
+GRUB_EOF
 else
-    log_error "Failed to write hostid file to target system"
-    exit 1
+    # Log warning if this script is running but force import is not needed
+    echo "Warning: /etc/grub.d/99_zfs_firstboot running but /.zfs-force-import-firstboot not found" >&2
+    echo "This script should have been automatically removed after first boot" >&2
 fi
+EOF
 
-# Step 3: Check and sync bpool to match rpool (if needed)
-BPOOL_HOSTID_DECIMAL=$(zdb -l "${PART1_BOOT}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
-if [[ -n "${BPOOL_HOSTID_DECIMAL}" && "${BPOOL_HOSTID_DECIMAL}" =~ ^[0-9]+$ ]]; then
-    if [[ "${BPOOL_HOSTID_DECIMAL}" != "${RPOOL_HOSTID_DECIMAL}" ]]; then
-        log_info "⚠️  bpool hostid mismatch detected: ${BPOOL_HOSTID_DECIMAL}"
-        log_info "🔧 Attempting to sync bpool hostid to match rpool..."
-        if zpool export bpool 2>/dev/null && zpool import bpool 2>/dev/null; then
-            # Verify the sync worked
-            NEW_BPOOL_HOSTID=$(zdb -l "${PART1_BOOT}" 2>/dev/null | grep -E "hostid:" | head -1 | awk '{print $2}' || echo "")
-            if [[ "${NEW_BPOOL_HOSTID}" == "${RPOOL_HOSTID_DECIMAL}" ]]; then
-                log_info "✓ bpool hostid synchronized successfully"
-            else
-                log_warning "⚠️  bpool hostid sync may have failed - manual intervention may be needed"
-            fi
+chmod +x /mnt/etc/grub.d/99_zfs_firstboot
+
+# Create marker file that indicates first boot is needed
+touch /mnt/.zfs-force-import-firstboot
+
+# Update GRUB configuration to include the first-boot force import option
+log_info "Updating GRUB configuration with first-boot force import option..."
+chroot /mnt update-grub
+
+# Use the sync script to ensure GRUB is installed on all ZFS mirror drives
+log_info "Installing GRUB to all ZFS mirror drives for redundancy..."
+chroot /mnt /usr/local/bin/sync-grub-to-mirror-drives
+log_info "✓ GRUB updated and installed on all ZFS mirror drives with first-boot configuration"
+
+# Create systemd service that automatically cleans up after successful first boot
+cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'EOF'
+[Unit]
+Description=Remove ZFS first-boot force import configuration after successful boot
+After=multi-user.target
+ConditionPathExists=/.zfs-force-import-firstboot
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '
+    # Set up logging function
+    log_info() { logger -t "zfs-firstboot-cleanup" -p user.info "$1"; echo "$1"; }
+    log_error() { logger -t "zfs-firstboot-cleanup" -p user.err "$1"; echo "ERROR: $1" >&2; }
+    log_warning() { logger -t "zfs-firstboot-cleanup" -p user.warning "$1"; echo "WARNING: $1"; }
+
+    log_info "=== ZFS First-Boot Cleanup Service Starting ==="
+    log_info "Hostname: $(hostname)"
+
+    # Log ZFS pool status
+    pool_status=$(zpool list -H -o name,health 2>/dev/null | tr "\t" " " | sed "s/^/  /")
+    if [[ -n "$pool_status" ]]; then
+        log_info "ZFS pool status:"
+        echo "$pool_status" | while read line; do log_info "$line"; done
+    else
+        log_warning "No ZFS pools found"
+    fi
+
+    log_info "Removing first-boot force import configuration..."
+
+    # Remove force import marker
+    if [[ -f /.zfs-force-import-firstboot ]]; then
+        if rm -f /.zfs-force-import-firstboot; then
+            log_info "Removed force import marker: /.zfs-force-import-firstboot"
         else
-            log_warning "⚠️  Could not export/import bpool - hostid mismatch may cause boot issues"
-            log_warning "If boot fails, run: zpool import -f rpool && zpool import -f bpool && reboot"
+            log_error "Failed to remove force import marker: /.zfs-force-import-firstboot"
         fi
     else
-        log_info "✓ bpool hostid already matches rpool"
+        log_info "Force import marker not found (already removed)"
     fi
-else
-    log_warning "⚠️  Could not read bpool hostid - proceeding with rpool hostid"
-fi
 
-# Final validation: verify target hostid matches pool hostid
-if ! validate_pool_hostid "at completion" "${TARGET_HOSTID_RAW}"; then
-    log_error "Final hostid validation failed - target system hostid does not match pools"
-    log_error "Target system hostid: ${TARGET_HOSTID_RAW}"
-    log_error "Manual intervention required on first boot:"
-    log_error "  zpool import -f rpool"
-    log_error "  zpool import -f bpool"
-    log_error "  reboot"
-    exit 1
-fi
-log_info "✓ Target system hostid (${TARGET_HOSTID_RAW}) matches pool hostid"
-log_info "✓ Clean ZFS import expected on first boot"
+    # Remove GRUB first-boot script
+    if [[ -f /etc/grub.d/99_zfs_firstboot ]]; then
+        if rm -f /etc/grub.d/99_zfs_firstboot; then
+            log_info "Removed GRUB first-boot script: /etc/grub.d/99_zfs_firstboot"
+        else
+            log_error "Failed to remove GRUB first-boot script: /etc/grub.d/99_zfs_firstboot"
+        fi
+    else
+        log_info "GRUB first-boot script not found (already removed)"
+    fi
+
+    # Update GRUB configuration
+    log_info "Updating GRUB configuration..."
+    if update-grub >/dev/null 2>&1; then
+        log_info "GRUB configuration updated successfully"
+    else
+        log_error "GRUB update failed (exit code: $?)"
+    fi
+
+    # Disable cleanup service
+    log_info "Disabling cleanup service..."
+    if systemctl disable zfs-firstboot-cleanup.service >/dev/null 2>&1; then
+        log_info "Cleanup service disabled successfully"
+    else
+        log_error "Failed to disable cleanup service (exit code: $?)"
+    fi
+
+    log_info "=== ZFS First-Boot Cleanup Complete ==="
+    log_info "Future boots will use standard ZFS imports without force flags"
+'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable the cleanup service
+chroot /mnt systemctl enable zfs-firstboot-cleanup.service
+
+log_info "✓ First boot configured to use force import (zfs_force=1)"
+log_info "✓ Auto-cleanup service enabled - removes force configuration after successful boot"
+log_info "✓ Future boots will use clean imports without force flags"
+
+# ================================================================
+# MANUAL RECOVERY INSTRUCTIONS
+# ================================================================
+# Document manual recovery steps in case the automatic force import fails
+
+log_header "First Boot Recovery Information"
+echo ""
+echo -e "${YELLOW}${BOLD}If you encounter boot issues on first boot:${NC}"
+echo -e "${CYAN}1. From initramfs prompt, run these commands:${NC}"
+echo -e "   ${GREEN}zpool import -f rpool${NC}"
+echo -e "   ${GREEN}zpool import -f bpool${NC}"
+echo -e "   ${GREEN}exit${NC}"
+echo ""
+echo -e "${CYAN}2. After successful boot, the system will automatically remove${NC}"
+echo -e "   ${CYAN}the force import configuration for future boots.${NC}"
+echo ""
+echo -e "${CYAN}3. If you need to manually clean up the configuration:${NC}"
+echo -e "   ${GREEN}sudo rm -f /.zfs-force-import-firstboot${NC}"
+echo -e "   ${GREEN}sudo rm -f /etc/grub.d/99_zfs_firstboot${NC}"
+echo -e "   ${GREEN}sudo update-grub${NC}"
+echo ""
 
 show_progress 10 10 "Installation complete!"
+
+# Final summary of the first-boot approach
+log_info "📋 Summary: First boot will use automatic force import for reliability"
+log_info "🔄 After successful first boot, the system switches to clean imports automatically"
 
 # Mark installation as completed
 INSTALL_STATE="completed"
@@ -2480,7 +2934,7 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     echo ""
     echo -e "${YELLOW}${BOLD}First Boot:${NC}"
     echo -e "  • Force import flag will be automatically removed"
-    echo -e "  • Manual cleanup available: ${GREEN}sudo /usr/local/bin/zfs-remove-force-flag${NC}"
+    echo -e "  • Manual cleanup (if needed): ${GREEN}sudo rm -f /.zfs-force-import-firstboot /etc/grub.d/99_zfs_firstboot && sudo update-grub${NC}"
     echo ""
     echo -e "${YELLOW}${BOLD}Post-Install Recommendations:${NC}"
     echo -e "${GREEN}1. Test the installation:${NC}"
@@ -2497,6 +2951,13 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     echo ""
     echo -e "${GREEN}5. Schedule regular maintenance:${NC}"
     echo -e "   ${GREEN}# Monthly scrubs and weekly trims are pre-configured${NC}"
+    echo ""
+    echo -e "${YELLOW}${BOLD}Utility Scripts Created:${NC}"
+    echo -e "  • ${GREEN}/usr/local/bin/test-zfs-mirror${NC} - Test system functionality"
+    echo -e "  • ${GREEN}/usr/local/bin/sync-efi-partitions${NC} - Sync EFI between drives"
+    echo -e "  • ${GREEN}/usr/local/bin/sync-grub-to-mirror-drives${NC} - Install GRUB to all drives"
+    echo -e "  • ${GREEN}/usr/local/bin/replace-drive-in-zfs-boot-mirror${NC} - Replace failed drives"
+    echo -e "  • Manual cleanup commands documented in recovery guide (rarely needed)"
 else
     echo -e "${YELLOW}System remains mounted at /mnt${NC}"
 fi
