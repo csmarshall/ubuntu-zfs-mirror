@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.0.0 - MAJOR: Simplified first-boot force import with countdown timer for --prepare flag
+# Version: 5.0.1 - BUGFIX: Fixed EFI sync deleting boot files and added man package
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.0.0"
+readonly VERSION="5.0.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -1273,7 +1273,33 @@ if ! mount "${TARGET_EFI}" "${TARGET_MOUNT}"; then
     exit 1
 fi
 
-rsync -av --delete /boot/efi/ "${TARGET_MOUNT}/"
+# Sync generic BOOT directory
+rsync -av /boot/efi/EFI/BOOT/ "${TARGET_MOUNT}/EFI/BOOT/" 2>/dev/null || {
+    log_message "Warning: Could not sync EFI/BOOT directory"
+}
+
+# Find source Ubuntu folder (currently mounted drive's folder)
+SOURCE_UBUNTU_FOLDER=$(find /boot/efi/EFI/ -maxdepth 1 -name "Ubuntu-*" -type d | head -1)
+if [[ -z "${SOURCE_UBUNTU_FOLDER}" ]]; then
+    log_message "ERROR: No Ubuntu folder found in source EFI partition"
+    exit 1
+fi
+
+# Find or create target Ubuntu folder (unmounted drive's folder should exist)
+TARGET_UBUNTU_FOLDER=$(find "${TARGET_MOUNT}/EFI/" -maxdepth 1 -name "Ubuntu-*" -type d | head -1)
+if [[ -z "${TARGET_UBUNTU_FOLDER}" ]]; then
+    log_message "Warning: No Ubuntu folder found in target EFI partition, copying source folder structure"
+    TARGET_FOLDER_NAME=$(basename "${SOURCE_UBUNTU_FOLDER}")
+    TARGET_UBUNTU_FOLDER="${TARGET_MOUNT}/EFI/${TARGET_FOLDER_NAME}"
+    mkdir -p "${TARGET_UBUNTU_FOLDER}"
+fi
+
+# Sync Ubuntu folder contents (preserving target folder name)
+log_message "Syncing $(basename "${SOURCE_UBUNTU_FOLDER}") -> $(basename "${TARGET_UBUNTU_FOLDER}")"
+rsync -av "${SOURCE_UBUNTU_FOLDER}/" "${TARGET_UBUNTU_FOLDER}/" 2>/dev/null || {
+    log_message "ERROR: Failed to sync Ubuntu folder contents"
+    exit 1
+}
 
 umount "${TARGET_MOUNT}"
 rmdir "${TARGET_MOUNT}"
@@ -1895,6 +1921,7 @@ apt-get install --yes \
     openssh-server \
     sudo rsync \
     bsdextrautils \
+    man-db \
     htop \
     software-properties-common \
     systemd-timesyncd \
