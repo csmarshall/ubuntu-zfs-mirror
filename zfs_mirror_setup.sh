@@ -20,6 +20,7 @@ readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
+readonly CYAN='\033[0;36m'
 readonly PINK='\033[0;35m'
 readonly BOLD='\033[1m'
 readonly NC='\033[0m' # No Color
@@ -2929,12 +2930,19 @@ else
 fi
 
 echo ""
+# Prepare log file name for copying to installed system
+INSTALLED_LOG_NAME="zfs-mirror-setup_${VERSION}_$(date +%Y%m%dT%H%M%S).log"
+
 echo -en "${BOLD}Unmount and prepare for reboot? (Y/n): ${NC}"
 read -r response
 
 if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     log_info "Performing clean shutdown sequence..."
-        
+
+    # Copy installation log to the installed system for future reference
+    cp "${LOG_FILE}" "/mnt/var/log/${INSTALLED_LOG_NAME}"
+    log_info "Installation log copied to: /var/log/${INSTALLED_LOG_NAME}"
+
     sync
     fuser -km /mnt 2>/dev/null || true
     sleep 2
@@ -3001,5 +3009,7 @@ else
 fi
 
 echo ""
-echo -e "${BOLD}Installation log: ${GREEN}${LOG_FILE}${NC}"
+echo -e "${BOLD}Installation logs:${NC}"
+echo -e "  Live USB: ${GREEN}${LOG_FILE}${NC}"
+echo -e "  Installed system: ${GREEN}/var/log/${INSTALLED_LOG_NAME}${NC}"
 echo -e "${BOLD}Original repository: ${GREEN}${ORIGINAL_REPO}${NC}"
