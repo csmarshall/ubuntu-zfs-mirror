@@ -579,7 +579,7 @@ wipe_drives_completely() {
     echo ""
     echo -e "${YELLOW}This operation cannot be undone!${NC}"
     echo ""
-    echo -en "${BOLD}Type 'DESTROY' to confirm: ${NC}"
+    echo -e "${BOLD}Type 'DESTROY' to confirm: ${NC}"
     read -r confirmation
     
     if [[ "${confirmation}" != "DESTROY" ]]; then
@@ -1133,7 +1133,7 @@ perform_pre_destruction_analysis() {
         echo -e "${RED}All pools and data will be permanently destroyed.${NC}"
         echo ""
         echo -e "${BOLD}Final confirmation required:${NC}"
-        echo -en "${BOLD}Type 'DESTROY-EXISTING-DATA' to confirm: ${NC}"
+        echo -e "${BOLD}Type 'DESTROY-EXISTING-DATA' to confirm: ${NC}"
         read -r confirmation
         if [[ "${confirmation}" != "DESTROY-EXISTING-DATA" ]]; then
             log_info "Installation cancelled - ZFS pools preserved"
@@ -1214,7 +1214,7 @@ ZFS_DEFAULTS_EOF
 
 # Create simplified EFI sync script
 create_efi_sync_script() {
-    cat << EFI_SYNC_SCRIPT > /mnt/usr/local/bin/sync-efi-partitions
+    cat << 'EFI_SYNC_SCRIPT' > /mnt/usr/local/bin/sync-efi-partitions
 #!/bin/bash
 # EFI Partition Sync Script for ZFS Mirror Drives\n# \n# CREATED BY: Ubuntu ZFS Mirror Root Installation Script (v${VERSION})\n# PURPOSE: Sync EFI partitions between mirror drives with identical UUIDs\n# LOCATION: /usr/local/bin/sync-efi-partitions\n# \n# This script automatically syncs the EFI System Partition content between\n# mirror drives. It runs automatically after kernel updates via APT hooks.\n#
 set -euo pipefail
@@ -2281,10 +2281,11 @@ for pool in bpool rpool; do
         while IFS= read -r drive; do
             if [[ "$drive" =~ ^(.*)-part[0-9]+$ ]]; then
                 # Add /dev/disk/by-id/ prefix if not present
+                local drive_base="${BASH_REMATCH[1]}"
                 if [[ "$drive" =~ ^/dev/disk/by-id/ ]]; then
-                    base_drive="${BASH_REMATCH[1]}"
+                    base_drive="$drive_base"
                 else
-                    base_drive="/dev/disk/by-id/${BASH_REMATCH[1]}"
+                    base_drive="/dev/disk/by-id/$drive_base"
                 fi
                 if [[ ! " ${DRIVES[*]} " =~ " ${base_drive} " ]]; then
                     DRIVES+=("$base_drive")
