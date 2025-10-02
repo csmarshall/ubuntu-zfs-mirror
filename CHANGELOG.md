@@ -1,5 +1,41 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.1.0 - MAJOR: Removed obsolete hostid approach and implemented smart GRUB force import (2025-10-02)
+
+**Major Architectural Changes for Enhanced Reliability**
+
+Comprehensive refactoring that eliminates complex hostid synchronization in favor of a simpler, more reliable first-boot force import mechanism with automatic cleanup.
+
+**Major Changes:**
+- REMOVED: 400+ lines of obsolete hostid synchronization logic and validation
+- REPLACED: Complex hostid approach with ZFS-native force import using `zfs_force=1` kernel parameter
+- IMPLEMENTED: Smart GRUB configuration inheritance for seamless first-boot experience
+- ADDED: Robust `set_grub_default()` function with comprehensive error handling and fallback mechanisms
+- ENHANCED: Automatic log preservation to `/var/log/zfs-mirror-setup_${VERSION}_${DATESTAMP}.log`
+- IMPROVED: GRUB generation from dynamic parsing to static variable-based approach for reliability
+
+**Technical Implementation:**
+- **Force Import**: Uses `/etc/default/zfs` with `ZFS_INITRD_ADDITIONAL_DATASETS` and `ZPOOL_IMPORT_OPTS="-f"`
+- **GRUB Integration**: Intelligent inheritance of existing kernel parameters including `console=ttyS0,115200`
+- **Cleanup Mechanism**: Hybrid approach with robust installation functions and simple cleanup scripts
+- **Error Recovery**: Comprehensive GRUB_DEFAULT editing with sed validation and fallback creation
+- **Logging**: Full installation log preserved for troubleshooting and verification
+
+**User Impact:**
+- Eliminates all "pool was previously in use from another system" errors permanently
+- Provides seamless first-boot experience with automatic force import cleanup
+- Maintains existing console and kernel parameter configurations
+- Reduces installation complexity while improving reliability
+- Comprehensive logging for troubleshooting and audit trails
+
+**Files Changed:**
+- zfs_mirror_setup.sh: Major refactoring with 400+ lines removed, 200+ lines added
+- Added memtest86+ package for enhanced system diagnostics
+
+**Git Hash**: [To be updated after commit]
+
+---
+
 ## v5.0.1 - BUGFIX: Fixed EFI sync and GRUB sync issues (2025-10-01)
 
 **Critical Bug Fixes for Production Stability**

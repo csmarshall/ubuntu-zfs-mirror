@@ -12,23 +12,23 @@
 - Clean import failures on first boot
 
 **Root Cause:**
-Hostid mismatch between installer environment and target system. ZFS pools are created with one hostid but target system boots with a different hostid.
+ZFS pools created in live CD environment may not import cleanly on first boot due to different system context.
 
-**Solution (v5.0.0 - Simplified Approach):**
-- **First-boot force import:** Uses ZFS kernel parameter `zfs_force=1` for guaranteed first boot
-- **ZFS native integration:** Leverages built-in ZFS initramfs force import support
-- **Auto-cleanup:** Systemd service automatically removes force configuration after successful boot
-- **Clean subsequent boots:** Future boots use standard imports without force flags
-- **No complex synchronization:** Eliminates hostid manipulation entirely
+**Solution (v5.1.0 - Smart Force Import):**
+- **Automatic force import:** Uses `/etc/default/zfs` configuration for seamless first boot
+- **ZFS native integration:** Leverages OpenZFS systemd service configuration
+- **Smart cleanup:** Automatic removal of force configuration after successful first boot
+- **Parameter inheritance:** Preserves existing kernel parameters (console, etc.)
+- **No synchronization needed:** Eliminates complex hostid manipulation entirely
 
 **Technical Implementation:**
-- **Kernel parameter:** `zfs_force=1` sets `ZPOOL_FORCE="-f"` in ZFS initramfs
-- **GRUB integration:** Custom script adds force parameter only for first boot
-- **Auto-removal:** `/etc/grub.d/99_zfs_firstboot` script self-destructs after first boot
-- **Service cleanup:** `zfs-firstboot-cleanup.service` removes all force configuration
-- **Fail-safe design:** If cleanup fails, system continues to boot normally
+- **ZFS Configuration:** `ZPOOL_IMPORT_OPTS="-f"` in `/etc/default/zfs` for force import
+- **Initramfs Integration:** Works with `zfs-import-scan.service` for automatic pool detection
+- **GRUB Inheritance:** Smart detection and preservation of existing kernel parameters
+- **Auto-cleanup:** Systemd service removes force configuration after successful boot
+- **Robust Error Handling:** Comprehensive GRUB editing with fallback mechanisms
 
-### Manual Recovery Instructions (v5.0.0)
+### Manual Recovery Instructions (v5.1.0)
 
 **If First Boot Fails (Rare):**
 If the automatic force import somehow fails, you can manually import:
@@ -44,247 +44,41 @@ exit
 If you need to manually remove the first-boot configuration:
 
 ```bash
-# Remove first-boot marker and GRUB script
-sudo rm -f /.zfs-force-import-firstboot
-sudo rm -f /etc/grub.d/99_zfs_firstboot
-sudo update-grub
+# Remove force import configuration
+sudo rm -f /etc/default/zfs.bak
+sudo sed -i '/ZFS_INITRD_ADDITIONAL_DATASETS=/d' /etc/default/zfs
+sudo sed -i '/ZPOOL_IMPORT_OPTS=/d' /etc/default/zfs
 sudo systemctl disable zfs-firstboot-cleanup.service
 ```
 
 **Technical Details:**
-- **Force parameter source:** Found in `/usr/share/initramfs-tools/scripts/zfs` line 860-862
-- **Kernel cmdline pattern:** `(zfs_force|zfs.force|zfsforce)=(on|yes|1)`
-- **Import logic:** Line 245: `${ZPOOL} import -N ${ZPOOL_FORCE} ${ZPOOL_IMPORT_OPTS}`
-- **Auto-detection:** Script analyzes actual ZFS initramfs code for real variables
-    exit 1
-fi
+- **ZFS Configuration:** Uses `/etc/default/zfs` for OpenZFS systemd service configuration
+- **Import Service:** `zfs-import-scan.service` handles automatic pool detection and import
+- **Force Import:** `ZPOOL_IMPORT_OPTS="-f"` parameter passed to zpool import commands
+- **Smart GRUB:** Preserves existing kernel parameters while adding necessary ZFS options
 
-# Double-check consistency
-if [[ "${HOSTID}" != "${NEW_HOSTID_CHECK}" ]]; then
-    log_error "Hostid inconsistent after generation"
-    exit 1
-fi
+### Legacy Issues (Pre-v5.1.0)
 
-# v4.2.8: Install util-linux in chroot and improve hostid reading
-apt-get install --yes util-linux  # Ensures hexdump is available
-HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /etc/hostid | tr -d ' ')" || echo "failed")
-```
+**Note:** The following issues were related to complex hostid synchronization approaches used in versions prior to v5.1.0. These issues no longer apply as the hostid approach has been completely removed in favor of a simpler force import mechanism.
 
-**Manual Recovery (if using old script):**
-```bash
-# Export pools
-zpool export rpool bpool
+**Historical Context:**
+- **v4.2.x - v4.3.x:** Used complex hostid synchronization with multiple validation points
+- **v5.0.x:** Used kernel parameter `zfs_force=1` approach
+- **v5.1.0+:** Uses `/etc/default/zfs` configuration for seamless integration
 
-# Set correct hostid and re-import
-echo -ne '\x0d\x31\xd8\xfd' > /etc/hostid
-zpool import -f rpool
-zpool import -f bpool
+**Migration from Legacy Versions:**
+If upgrading from older script versions, the new approach eliminates all previous hostid-related issues including:
+- Hostid generation timing issues
+- Chroot environment hexdump/od command inconsistencies
+- Byte order and validation failures
+- Complex synchronization logic
 
-# Update target system
-echo -ne '\x0d\x31\xd8\xfd' > /mnt/etc/hostid
-```
-
-### Chroot Hostid Generation Issues (Fixed v4.2.8-v4.2.9)
-
-#### Missing hexdump in Chroot Environment (Fixed v4.2.8)
-
-**Symptoms:**
-- Log shows: `/tmp/configure_system.sh: line 134: hexdump: command not found`
-- Hostid validation shows: `Using previously generated hostid for ZFS: 00000000`
-- Installation fails later with pool hostid mismatch
-
-**Root Cause:**
-The `hexdump` command was not available in the chroot environment, causing hostid reading to fail and fall back to generating a new random hostid.
-
-**Fix Applied (v4.2.8):**
-- Install `util-linux` package in chroot (contains hexdump)
-- Use `od` as backup method for reading hostid file
-- Better error detection for failed hostid reads
-
-**Manual Fix (if using old script):**
-```bash
-# Install util-linux in chroot
-chroot /mnt apt-get install --yes util-linux
-
-# Or use od to read hostid file manually
-HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /etc/hostid | tr -d ' ')")
-echo "Current hostid: ${HOSTID}"
-```
-
-#### Chroot Hostid Command Ignoring Synchronized File (Fixed v4.2.9)
-
-**Symptoms:**
-- Pools created with correct hostid (e.g., `056c64de`)
-- Final validation fails with different hostid (e.g., `75eded19`)
-- Log shows: `ZFS configuration created with hostid: 75eded19` but pools have `056c64de`
-
-**Root Cause:**
-The `chroot /mnt hostid` command generates new random hostids instead of reading the synchronized `/mnt/etc/hostid` file.
-
-**Fix Applied (v4.2.9):**
-```bash
-# Changed from:
-HOSTID=$(chroot /mnt hostid 2>/dev/null || echo "")
-
-# To:
-HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /mnt/etc/hostid | tr -d ' ')" || echo "failed")
-```
-
-**Manual Fix (if using old script):**
-```bash
-# Read hostid directly from synchronized file
-HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /mnt/etc/hostid | tr -d ' ')")
-echo "Synchronized hostid: ${HOSTID}"
-
-# Verify both files match
-cmp /etc/hostid /mnt/etc/hostid && echo "Files match" || echo "Files differ"
-```
-
-#### Malformed Od Command Causing Concatenation Errors (Fixed v4.2.10)
-
-**Symptoms:**
-- Log shows hostid like: `00000612failed` or `Using synchronized hostid for ZFS configuration: 00000612failed`
-- Validation fails with malformed hostid containing "failed" text
-- Od command works but error handling concatenates output incorrectly
-
-**Root Cause:**
-The `printf` command structure was malformed, causing partial od output to concatenate with error handling text.
-
-**Fix Applied (v4.2.10):**
-```bash
-# Changed from (broken):
-HOSTID=$(printf "%08x" "$(od -An -tx4 -N4 /mnt/etc/hostid | tr -d ' ')" || echo "failed")
-
-# To (fixed):
-HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
-if [[ -n "${HOSTID_RAW}" && "${HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
-    HOSTID="${HOSTID_RAW}"
-else
-    HOSTID="failed"
-fi
-```
-
-**Manual Fix (if using old script):**
-```bash
-# Test the od command properly
-HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
-echo "Raw hostid: '${HOSTID_RAW}'"
-if [[ "${HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
-    echo "Valid hostid: ${HOSTID_RAW}"
-else
-    echo "Invalid or failed hostid read"
-fi
-```
-
-#### Inconsistent Hostid Reading Commands (Fixed v4.2.11)
-
-**Symptoms:**
-- Final validation fails even though pools were created correctly
-- Mix of `od` and `hexdump` commands causing inconsistent hostid reading
-- Hostid synchronization works during install but fails at final validation
-
-**Root Cause:**
-The script used `od` commands in some places (chroot environment) but still used `hexdump` in the final validation step, causing inconsistent hostid reading between install and target system environments.
-
-**Fix Applied (v4.2.11):**
-```bash
-# Changed from (inconsistent):
-TARGET_HOSTID=$(printf "%08x" "$(hexdump -e '1/4 "%u"' /mnt/etc/hostid)" 2>/dev/null || echo "failed")
-
-# To (consistent with rest of script):
-TARGET_HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
-if [[ -n "${TARGET_HOSTID_RAW}" && "${TARGET_HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
-    TARGET_HOSTID="${TARGET_HOSTID_RAW}"
-else
-    TARGET_HOSTID="failed"
-fi
-```
-
-**Manual Fix (if using old script):**
-```bash
-# Use consistent od command for all hostid reading
-TARGET_HOSTID_RAW=$(od -An -tx4 -N4 /mnt/etc/hostid 2>/dev/null | tr -d ' ')
-if [[ "${TARGET_HOSTID_RAW}" =~ ^[0-9a-f]{8}$ ]]; then
-    echo "Valid hostid: ${TARGET_HOSTID_RAW}"
-else
-    echo "Failed to read hostid"
-fi
-```
-
-#### Hostid Byte Order Issues (Fixed v4.3.0+)
-
-**Symptoms:**
-- Pool hostid validation fails even though synchronization appears to work
-- Log shows different hex values: `Expected: 956b0a0b, got rpool: 0b0a6b95`
-- Hostids appear to be "backwards" or byte-swapped
-
-**Root Cause:**
-Linux hostid files must be written in little-endian byte order, but hex string conversion creates big-endian format.
-
-**Example of the Problem:**
-```bash
-# Pool hostid: 185232277 (decimal) = 0x0b0a6b95 (hex)
-# Wrong way (big-endian): printf "%08x" 185232277 | xxd -r -p
-# Creates bytes: [0b, 0a, 6b, 95]
-# When read back: 956b0a0b (reversed!)
-
-# Correct way (little-endian): struct.pack('<I', 185232277)
-# Creates bytes: [95, 6b, 0a, 0b]
-# When read back: 0b0a6b95 (matches pool!)
-```
-
-**Fix Applied (v4.3.0):**
-```bash
-# Use Python struct.pack for correct byte order
-python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${HOSTID_DECIMAL}))"
-```
-
-#### New Simplified Approach (v4.3.1+)
-
-**Major Change: Pool-to-Target Hostid Synchronization**
-
-Starting with v4.3.0, the script uses a completely new approach that eliminates all previous timing and synchronization issues:
-
-**Old Approach (v4.2.x):**
-1. Generate hostid early with `zgenhostid -f`
-2. Try to synchronize during installation
-3. Multiple validation points with timing issues
-4. Complex error-prone synchronization logic
-
-**New Approach (v4.3.1+):**
-1. Create pools with whatever hostid installer has
-2. Complete entire installation normally
-3. **Final step**: Use rpool as authoritative source (cannot be exported)
-4. Set target system hostid to match rpool exactly
-5. Auto-sync bpool to match rpool via export/import
-6. Provide recovery instructions if synchronization fails
-
-**Benefits:**
-- ✅ No timing issues or race conditions
-- ✅ No risk of hostid files being overwritten mid-install
-- ✅ rpool is immutable authoritative source
-- ✅ Auto-recovery for bpool synchronization
-- ✅ Clear manual recovery instructions provided
-- ✅ Eliminates all "pool was previously in use from another system" errors
-- ✅ Much simpler logic and easier to debug
-
-**Code Example (v4.3.1):**
-```bash
-# Step 1: Read rpool hostid (authoritative source)
-RPOOL_HOSTID_DECIMAL=$(zdb -l "${PART1_ROOT}" | grep "hostid:" | awk '{print $2}')
-
-# Step 2: Set target system to match rpool (little-endian)
-python3 -c "import struct; open('/mnt/etc/hostid', 'wb').write(struct.pack('<I', ${RPOOL_HOSTID_DECIMAL}))"
-
-# Step 3: Auto-sync bpool if needed
-BPOOL_HOSTID_DECIMAL=$(zdb -l "${PART1_BOOT}" | grep "hostid:" | awk '{print $2}')
-if [[ "${BPOOL_HOSTID_DECIMAL}" != "${RPOOL_HOSTID_DECIMAL}" ]]; then
-    zpool export bpool && zpool import bpool
-fi
-
-# Step 4: Final validation
-validate_pool_hostid "at completion" "${TARGET_HOSTID_RAW}"
-```
+**Current Approach Benefits:**
+- ✅ No hostid manipulation required
+- ✅ Uses standard OpenZFS configuration files
+- ✅ Seamless integration with systemd services
+- ✅ Automatic cleanup after first successful boot
+- ✅ Preserves existing kernel parameters
 
 ### Quick Fixes
 
@@ -377,7 +171,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **4.3.1** (as of 2025-09-30)
+- Current version: **5.1.0** (as of 2025-10-02)
 
 **⚠️ CRITICAL: Version Synchronization Required**
 When updating version numbers, you **MUST** update ALL of these locations:
@@ -388,7 +182,7 @@ When updating version numbers, you **MUST** update ALL of these locations:
 
 Use this command to verify synchronization:
 ```bash
-grep -r "4\.[0-9]\+\.[0-9]\+" *.{sh,md} | grep -E "(Version|version|Script Version)"
+grep -r "5\.[0-9]\+\.[0-9]\+" *.{sh,md} | grep -E "(Version|version|Script Version)"
 ```
 
 ### AI Assistant Guidelines
