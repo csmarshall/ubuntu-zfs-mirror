@@ -2281,7 +2281,7 @@ for pool in bpool rpool; do
         while IFS= read -r drive; do
             if [[ "$drive" =~ ^(.*)-part[0-9]+$ ]]; then
                 # Add /dev/disk/by-id/ prefix if not present
-                local drive_base="${BASH_REMATCH[1]}"
+                drive_base="${BASH_REMATCH[1]}"
                 if [[ "$drive" =~ ^/dev/disk/by-id/ ]]; then
                     base_drive="$drive_base"
                 else
