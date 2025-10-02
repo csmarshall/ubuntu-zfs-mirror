@@ -513,6 +513,57 @@ validate_chroot_environment() {
     return 0
 }
 
+# Robust GRUB_DEFAULT editing function
+# Usage: set_grub_default "/path/to/grub" "entry_name_or_number"
+set_grub_default() {
+    local grub_file="$1"
+    local default_value="$2"
+
+    if [[ -z "${grub_file}" ]] || [[ -z "${default_value}" ]]; then
+        log_error "set_grub_default: Missing required parameters"
+        return 1
+    fi
+
+    if [[ ! -f "${grub_file}" ]]; then
+        log_error "set_grub_default: GRUB file does not exist: ${grub_file}"
+        return 1
+    fi
+
+    log_debug "Setting GRUB_DEFAULT to '${default_value}' in ${grub_file}"
+
+    # Check if GRUB_DEFAULT line exists
+    if grep -q "^GRUB_DEFAULT=" "${grub_file}"; then
+        # Replace existing line
+        if sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"${default_value}\"/" "${grub_file}"; then
+            log_debug "Updated existing GRUB_DEFAULT to '${default_value}'"
+            return 0
+        else
+            log_error "Failed to update GRUB_DEFAULT in ${grub_file}"
+            return 1
+        fi
+    else
+        # Add new line after GRUB_TIMEOUT if it exists, otherwise at end
+        if grep -q "^GRUB_TIMEOUT=" "${grub_file}"; then
+            if sed -i "/^GRUB_TIMEOUT=/a GRUB_DEFAULT=\"${default_value}\"" "${grub_file}"; then
+                log_debug "Added GRUB_DEFAULT='${default_value}' after GRUB_TIMEOUT"
+                return 0
+            else
+                log_error "Failed to add GRUB_DEFAULT after GRUB_TIMEOUT"
+                return 1
+            fi
+        else
+            # Add at end of file
+            if echo "GRUB_DEFAULT=\"${default_value}\"" >> "${grub_file}"; then
+                log_debug "Added GRUB_DEFAULT='${default_value}' at end of file"
+                return 0
+            else
+                log_error "Failed to add GRUB_DEFAULT to ${grub_file}"
+                return 1
+            fi
+        fi
+    fi
+}
+
 # ============================================================================
 # MAIN FUNCTIONS
 # ============================================================================
@@ -1187,29 +1238,19 @@ perform_pre_destruction_analysis() {
     return 0
 }
 
-# Create clean ZFS configuration (no force flags needed with hostid alignment)
+# Create ZFS configuration
 setup_zfs_config() {
-    local hostid="$1"
-
-    if [[ -z "${hostid}" ]]; then
-        log_error "setup_zfs_config: No hostid provided"
-        return 1
-    fi
-
     log_header "Creating ZFS Configuration"
-    log_info "Hostid alignment eliminates need for force flags and cleanup complexity"
+    log_info "ZFS configuration setup for reliable pool imports"
 
-    # Create ZFS defaults with proper hostid (no force flag needed)
+    # Create ZFS defaults file (will be updated with force import option later)
     cat > /mnt/etc/default/zfs << ZFS_DEFAULTS_EOF
 # ZFS Configuration for Ubuntu ZFS Mirror Installation
-# Hostid synchronized between installer and target system for clean import
-HOSTID=${hostid}
-
-# Clean import guaranteed by hostid alignment - no force flags needed
+# Default configuration for ZFS pool imports
 ZFS_DEFAULTS_EOF
 
-    log_info "ZFS configuration created with hostid: ${hostid}"
-    log_info "Pools will import cleanly on first boot without any manual intervention"
+    log_info "ZFS configuration created"
+    log_info "First-boot force import will be configured next"
     return 0
 }
 
@@ -2139,12 +2180,10 @@ fi
 
 show_progress 9 10 "Finalizing installation..."
 
-# Create ZFS configuration - hostid will be set properly at end of installation
-log_info "Creating ZFS configuration (hostid will be synchronized from pools at completion)"
+# Create ZFS configuration
+log_info "Creating ZFS configuration for reliable pool imports"
 
-# Get current installer hostid for temporary ZFS config
-INSTALLER_HOSTID=$(hostid)
-if ! setup_zfs_config "${INSTALLER_HOSTID}"; then
+if ! setup_zfs_config; then
     log_error "Failed to setup ZFS configuration"
     exit 1
 fi
@@ -2763,36 +2802,58 @@ echo 'ZPOOL_IMPORT_OPTS="-f"' >> /mnt/etc/default/zfs
 # Generate initial GRUB config to get the default entry
 chroot /mnt update-grub
 
-# Create GRUB script that copies default entry and adds zfs_force=1
-cat > /mnt/etc/grub.d/99_zfs_firstboot << 'EOF'
+# Create GRUB script using script variables (much more reliable than parsing)
+cat > /mnt/etc/grub.d/99_zfs_firstboot << GRUB_SCRIPT_EOF
 #!/bin/sh
 # ZFS First-Boot Force Import Configuration
-# Creates a copy of the default Ubuntu entry with zfs_force=1 added
+# Creates a well-formed Ubuntu entry with zfs_force=1 using installation variables
 # After first successful boot, this script and configuration are automatically removed
 
 if [ -f /.zfs-force-import-firstboot ]; then
-    # Find the default Ubuntu menuentry from the existing GRUB config
-    DEFAULT_ENTRY=$(grep -A 20 "menuentry 'Ubuntu" /boot/grub/grub.cfg | head -20)
+    # Build kernel command line using same logic as main GRUB config
+    KERNEL_CMDLINE="zfs_force=1"
 
-    if [ -n "$DEFAULT_ENTRY" ]; then
-        # Extract the title from the default entry
-        DEFAULT_TITLE=$(echo "$DEFAULT_ENTRY" | grep "menuentry" | sed "s/menuentry '//;s/' .*//" | head -1)
+    # Add serial console if configured
+    if [ "${USE_SERIAL_CONSOLE:-false}" = "true" ]; then
+        KERNEL_CMDLINE="\$KERNEL_CMDLINE console=tty1 console=${SERIAL_PORT:-ttyS1},${SERIAL_SPEED:-115200}"
+    fi
 
-        # Create modified entry with force import
-        echo "# ZFS first-boot force import menu entry (auto-generated, auto-removed)"
-        echo "$DEFAULT_ENTRY" | sed \
-            -e "s/menuentry '[^']*'/menuentry '$DEFAULT_TITLE - First boot force zfs import'/" \
-            -e "s/\(linux.*root=ZFS=[^ ]*\)\( ro\)/\1\2 zfs_force=1/" \
-            -e "s/'gnulinux-[^']*'/'gnulinux-zfs-firstboot'/"
+    # Add AppArmor setting if disabled
+    if [ "${USE_APPARMOR:-true}" = "false" ]; then
+        KERNEL_CMDLINE="\$KERNEL_CMDLINE apparmor=0"
+    fi
+
+    # Add root filesystem
+    KERNEL_CMDLINE="\$KERNEL_CMDLINE root=ZFS=rpool/root ro"
+
+    # Discover kernel version
+    KERNEL_VERSION=\$(ls /boot/@/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/@/vmlinuz-||')
+
+    if [ -n "\$KERNEL_VERSION" ]; then
+        cat << 'GRUB_ENTRY_EOF'
+# ZFS first-boot force import menu entry (auto-generated, auto-removed)
+menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-zfs-firstboot' {
+    recordfail
+    load_video
+    gfxmode \$linux_gfx_mode
+    insmod gzio
+    if [ x\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+    insmod part_gpt
+    insmod zfs
+    search --no-floppy --fs-uuid --set=root
+GRUB_ENTRY_EOF
+        echo "    linux   \"/boot/@/vmlinuz-\$KERNEL_VERSION\" \$KERNEL_CMDLINE"
+        echo "    initrd  \"/boot/@/initrd.img-\$KERNEL_VERSION\""
+        echo "}"
     else
-        echo "# Warning: Could not find default Ubuntu entry" >&2
+        echo "# Warning: No kernel found in /boot/@/" >&2
     fi
 else
     # Log warning if this script is running but force import is not needed
     echo "Warning: /etc/grub.d/99_zfs_firstboot running but /.zfs-force-import-firstboot not found" >&2
     echo "This script should have been automatically removed after first boot" >&2
 fi
-EOF
+GRUB_SCRIPT_EOF
 
 chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 
@@ -2804,12 +2865,20 @@ chroot /mnt update-grub
 FORCE_IMPORT_TITLE=$(chroot /mnt grep -o "menuentry '[^']*First boot force zfs import'" /boot/grub/grub.cfg | sed "s/menuentry '//;s/'//" | head -1)
 if [[ -n "${FORCE_IMPORT_TITLE}" ]]; then
     log_info "Setting force import entry as default: ${FORCE_IMPORT_TITLE}"
-    sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"${FORCE_IMPORT_TITLE}\"/" /mnt/etc/default/grub
-    chroot /mnt update-grub
+    if set_grub_default "/mnt/etc/default/grub" "${FORCE_IMPORT_TITLE}"; then
+        chroot /mnt update-grub
+    else
+        log_error "Failed to set GRUB default to force import entry"
+        exit 1
+    fi
 else
     log_warning "Could not find force import entry title, using fallback"
-    sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT="gnulinux-zfs-firstboot"/' /mnt/etc/default/grub
-    chroot /mnt update-grub
+    if set_grub_default "/mnt/etc/default/grub" "gnulinux-zfs-firstboot"; then
+        chroot /mnt update-grub
+    else
+        log_error "Failed to set GRUB default to fallback entry"
+        exit 1
+    fi
 fi
 
 # Use the sync script to ensure GRUB is installed on all ZFS mirror drives
@@ -3027,7 +3096,7 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     echo -e "${GREEN}${BOLD}Key Features:${NC}"
     echo -e "  ✓ True EFI redundancy with UUID-based mounting"
     echo -e "  ✓ Ubuntu's built-in ZFS services (no custom units)"
-    echo -e "  ✓ Clean pool import via hostid alignment (no force flags)"
+    echo -e "  ✓ Automatic first-boot force import with cleanup"
     echo -e "  ✓ Both drives fully bootable and synchronized"
     echo -e "  ✓ Comprehensive test and recovery tools included"
     echo ""
