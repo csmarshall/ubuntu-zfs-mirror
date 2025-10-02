@@ -1,5 +1,35 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.1.1 - PATCH: Enhanced installation state tracking and fixed GRUB kernel detection (2025-10-02)
+
+**Improved Installation Reliability and Diagnostics**
+
+Enhanced installation state tracking for better failure diagnosis and fixed GRUB kernel detection issues that could prevent proper first-boot force import configuration.
+
+**Bug Fixes:**
+- FIXED: GRUB kernel detection failing with "No kernel found in /boot/@/" during first-boot setup
+- IMPROVED: Kernel detection with multiple fallback methods (direct path, ZFS path, dpkg query)
+- ENHANCED: Installation state tracking with 5 additional granular checkpoints for precise failure diagnosis
+
+**Technical Changes:**
+- **State Tracking**: Added `pools_creating_datasets`, `configuring_system`, `chroot_configuration`, `finalizing`, `configuring_first_boot` states
+- **Kernel Detection**: Multi-path fallback system handles both filesystem and chroot environments
+- **Error Reporting**: More accurate failure state reporting instead of misleading "pools_creating" errors
+- **GRUB Generation**: Robust kernel version detection prevents first-boot configuration failures
+
+**User Impact:**
+- Eliminates "No kernel found" warnings during GRUB generation
+- Provides precise failure location when installations encounter issues
+- Ensures first-boot force import mechanism works reliably
+- Better troubleshooting information for installation failures
+
+**Files Changed:**
+- zfs_mirror_setup.sh: +9 lines, -3 lines (state tracking and kernel detection improvements)
+
+**Git Hash**: [To be updated after commit]
+
+---
+
 ## v5.1.0 - MAJOR: Removed obsolete hostid approach and implemented smart GRUB force import (2025-10-02)
 
 **Major Architectural Changes for Enhanced Reliability**

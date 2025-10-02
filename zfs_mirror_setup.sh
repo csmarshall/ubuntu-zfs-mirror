@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.1.0 - MAJOR: Removed obsolete hostid approach and implemented smart GRUB force import
+# Version: 5.1.1 - PATCH: Enhanced installation state tracking and fixed GRUB kernel detection
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.1.0"
+readonly VERSION="5.1.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -1807,6 +1807,7 @@ perform_basic_zfs_cleanup "rpool" "${PART1_ROOT}" "${PART2_ROOT}"
 
 # Create ZFS pools
 log_header "Creating ZFS pools"
+INSTALL_STATE="pools_creating_datasets"
 log_info "Creating mirrored ZFS pools (hostid will be synchronized at end of installation)"
 
 # Create ZFS pools with consolidated logic
@@ -1848,6 +1849,7 @@ fi
 mkdir -p /mnt/etc/zfs
 
 show_progress 7 10 "Configuring system..."
+INSTALL_STATE="configuring_system"
 
 # Configure hostname and network
 echo "${HOSTNAME}" > /mnt/etc/hostname
@@ -1885,6 +1887,7 @@ deb http://security.ubuntu.com/ubuntu noble-security main restricted universe mu
 EOF
 
 show_progress 8 10 "Configuring system in chroot..."
+INSTALL_STATE="chroot_configuration"
 
 # Bind mount essential filesystems for chroot
 mount --make-private --rbind /dev /mnt/dev
@@ -2179,6 +2182,7 @@ if [[ $? -ne 0 ]]; then
 fi
 
 show_progress 9 10 "Finalizing installation..."
+INSTALL_STATE="finalizing"
 
 # Create ZFS configuration
 log_info "Creating ZFS configuration for reliable pool imports"
@@ -2788,6 +2792,7 @@ fi
 
 log_info "Configuring first-boot force import for reliable pool import..."
 log_info "This eliminates hostid synchronization complexity and ensures successful first boot"
+INSTALL_STATE="configuring_first_boot"
 
 # Create smart GRUB configuration that copies the default entry with zfs_force=1
 # This inherits all kernel parameters (serial console, AppArmor, etc.) automatically
@@ -2826,8 +2831,8 @@ if [ -f /.zfs-force-import-firstboot ]; then
     # Add root filesystem
     KERNEL_CMDLINE="\$KERNEL_CMDLINE root=ZFS=rpool/root ro"
 
-    # Discover kernel version
-    KERNEL_VERSION=\$(ls /boot/@/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/@/vmlinuz-||')
+    # Discover kernel version with multiple fallback methods
+    KERNEL_VERSION=\$(ls /boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/vmlinuz-||' || ls /boot/@/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/@/vmlinuz-||' || dpkg -l 'linux-image-*' 2>/dev/null | grep '^ii' | awk '{print \$2}' | sed 's/linux-image-//' | head -1)
 
     if [ -n "\$KERNEL_VERSION" ]; then
         cat << 'GRUB_ENTRY_EOF'
@@ -2842,11 +2847,12 @@ menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --clas
     insmod zfs
     search --no-floppy --fs-uuid --set=root
 GRUB_ENTRY_EOF
+        # Use ZFS dataset path for GRUB (this is correct for final system)
         echo "    linux   \"/boot/@/vmlinuz-\$KERNEL_VERSION\" \$KERNEL_CMDLINE"
         echo "    initrd  \"/boot/@/initrd.img-\$KERNEL_VERSION\""
         echo "}"
     else
-        echo "# Warning: No kernel found in /boot/@/" >&2
+        echo "# Warning: No kernel found in /boot/ or /boot/@/" >&2
     fi
 else
     # Log warning if this script is running but force import is not needed
