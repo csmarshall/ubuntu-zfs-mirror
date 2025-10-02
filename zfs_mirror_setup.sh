@@ -1927,7 +1927,8 @@ apt-get install --yes \
     software-properties-common \
     systemd-timesyncd \
     cron \
-    util-linux
+    util-linux \
+    memtest86+
 
 # Create EFI filesystems with identical volume IDs
 apt-get install --yes dosfstools
@@ -2749,30 +2750,43 @@ fi
 log_info "Configuring first-boot force import for reliable pool import..."
 log_info "This eliminates hostid synchronization complexity and ensures successful first boot"
 
-# Create GRUB configuration that adds zfs_force=1 ONLY on first boot
-# The zfs_force=1 parameter tells ZFS initramfs to use 'zpool import -f'
+# Create smart GRUB configuration that copies the default entry with zfs_force=1
+# This inherits all kernel parameters (serial console, AppArmor, etc.) automatically
+log_info "Creating first-boot GRUB configuration that inherits default settings..."
+
+# Create marker file that indicates first boot is needed
+touch /mnt/.zfs-force-import-firstboot
+
+# Create ZFS import configuration for bpool force import
+echo 'ZPOOL_IMPORT_OPTS="-f"' >> /mnt/etc/default/zfs
+
+# Generate initial GRUB config to get the default entry
+chroot /mnt update-grub
+
+# Create GRUB script that copies default entry and adds zfs_force=1
 cat > /mnt/etc/grub.d/99_zfs_firstboot << 'EOF'
 #!/bin/sh
 # ZFS First-Boot Force Import Configuration
-# Adds zfs_force=1 to kernel command line for first boot only
+# Creates a copy of the default Ubuntu entry with zfs_force=1 added
 # After first successful boot, this script and configuration are automatically removed
 
 if [ -f /.zfs-force-import-firstboot ]; then
-    cat << 'GRUB_EOF'
-# ZFS first-boot force import menu entry (auto-generated, auto-removed)
-menuentry 'Ubuntu (ZFS first boot - force import)' --class ubuntu --class gnu-linux --class gnu --class os $menuentry_id_option 'gnulinux-zfs-firstboot' {
-    recordfail
-    load_video
-    gfxmode $linux_gfx_mode
-    insmod gzio
-    if [ x$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
-    insmod part_gpt
-    insmod zfs
-    # Force import pools using zfs_force=1 kernel parameter
-    linux   /vmlinuz root=ZFS=rpool/ROOT/ubuntu ro zfs_force=1 quiet splash
-    initrd  /initrd.img
-}
-GRUB_EOF
+    # Find the default Ubuntu menuentry from the existing GRUB config
+    DEFAULT_ENTRY=$(grep -A 20 "menuentry 'Ubuntu" /boot/grub/grub.cfg | head -20)
+
+    if [ -n "$DEFAULT_ENTRY" ]; then
+        # Extract the title from the default entry
+        DEFAULT_TITLE=$(echo "$DEFAULT_ENTRY" | grep "menuentry" | sed "s/menuentry '//;s/' .*//" | head -1)
+
+        # Create modified entry with force import
+        echo "# ZFS first-boot force import menu entry (auto-generated, auto-removed)"
+        echo "$DEFAULT_ENTRY" | sed \
+            -e "s/menuentry '[^']*'/menuentry '$DEFAULT_TITLE - First boot force zfs import'/" \
+            -e "s/\(linux.*root=ZFS=[^ ]*\)\( ro\)/\1\2 zfs_force=1/" \
+            -e "s/'gnulinux-[^']*'/'gnulinux-zfs-firstboot'/"
+    else
+        echo "# Warning: Could not find default Ubuntu entry" >&2
+    fi
 else
     # Log warning if this script is running but force import is not needed
     echo "Warning: /etc/grub.d/99_zfs_firstboot running but /.zfs-force-import-firstboot not found" >&2
@@ -2782,19 +2796,118 @@ EOF
 
 chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 
-# Create marker file that indicates first boot is needed
-touch /mnt/.zfs-force-import-firstboot
-
-# Update GRUB configuration to include the first-boot force import option
-log_info "Updating GRUB configuration with first-boot force import option..."
+# Update GRUB to include the force import entry
+log_info "Generating GRUB configuration with first-boot force import entry..."
 chroot /mnt update-grub
+
+# Extract the title of our new force import entry and set it as default
+FORCE_IMPORT_TITLE=$(chroot /mnt grep -o "menuentry '[^']*First boot force zfs import'" /boot/grub/grub.cfg | sed "s/menuentry '//;s/'//" | head -1)
+if [[ -n "${FORCE_IMPORT_TITLE}" ]]; then
+    log_info "Setting force import entry as default: ${FORCE_IMPORT_TITLE}"
+    sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"${FORCE_IMPORT_TITLE}\"/" /mnt/etc/default/grub
+    chroot /mnt update-grub
+else
+    log_warning "Could not find force import entry title, using fallback"
+    sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT="gnulinux-zfs-firstboot"/' /mnt/etc/default/grub
+    chroot /mnt update-grub
+fi
 
 # Use the sync script to ensure GRUB is installed on all ZFS mirror drives
 log_info "Installing GRUB to all ZFS mirror drives for redundancy..."
 chroot /mnt /usr/local/bin/sync-grub-to-mirror-drives
 log_info "✓ GRUB updated and installed on all ZFS mirror drives with first-boot configuration"
 
-# Create systemd service that automatically cleans up after successful first boot
+# Create external cleanup script (proper approach instead of inline systemd script)
+cat > /mnt/usr/local/bin/zfs-firstboot-cleanup << 'EOF'
+#!/bin/bash
+# ZFS First-Boot Cleanup Script
+# Removes force import configuration after successful first boot
+
+set -euo pipefail
+
+# Set up logging functions
+log_info() { logger -t "zfs-firstboot-cleanup" -p user.info "$1"; echo "$1"; }
+log_error() { logger -t "zfs-firstboot-cleanup" -p user.err "$1"; echo "ERROR: $1" >&2; }
+log_warning() { logger -t "zfs-firstboot-cleanup" -p user.warning "$1"; echo "WARNING: $1"; }
+
+log_info "=== ZFS First-Boot Cleanup Service Starting ==="
+log_info "Hostname: $(hostname)"
+
+# Log ZFS pool status
+pool_status=$(zpool list -H -o name,health 2>/dev/null | tr "\t" " " | sed "s/^/  /")
+if [[ -n "$pool_status" ]]; then
+    log_info "ZFS pool status:"
+    echo "$pool_status" | while read line; do log_info "$line"; done
+else
+    log_warning "No ZFS pools found"
+fi
+
+log_info "Removing first-boot force import configuration..."
+
+# Remove force import marker
+if [[ -f /.zfs-force-import-firstboot ]]; then
+    if rm -f /.zfs-force-import-firstboot; then
+        log_info "Removed force import marker: /.zfs-force-import-firstboot"
+    else
+        log_error "Failed to remove force import marker: /.zfs-force-import-firstboot"
+    fi
+else
+    log_info "Force import marker not found (already removed)"
+fi
+
+# Remove ZFS import force option from /etc/default/zfs
+if [[ -f /etc/default/zfs ]] && grep -q 'ZPOOL_IMPORT_OPTS="-f"' /etc/default/zfs; then
+    if sed -i '/^ZPOOL_IMPORT_OPTS="-f"$/d' /etc/default/zfs; then
+        log_info "Removed ZPOOL_IMPORT_OPTS force option from /etc/default/zfs"
+    else
+        log_error "Failed to remove ZPOOL_IMPORT_OPTS from /etc/default/zfs"
+    fi
+else
+    log_info "ZPOOL_IMPORT_OPTS force option not found in /etc/default/zfs (already removed)"
+fi
+
+# Remove GRUB first-boot script
+if [[ -f /etc/grub.d/99_zfs_firstboot ]]; then
+    if rm -f /etc/grub.d/99_zfs_firstboot; then
+        log_info "Removed GRUB first-boot script: /etc/grub.d/99_zfs_firstboot"
+    else
+        log_error "Failed to remove GRUB first-boot script: /etc/grub.d/99_zfs_firstboot"
+    fi
+else
+    log_info "GRUB first-boot script not found (already removed)"
+fi
+
+# Reset GRUB default to standard Ubuntu entry
+log_info "Resetting GRUB default to standard Ubuntu entry..."
+if sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=0/' /etc/default/grub; then
+    log_info "GRUB_DEFAULT reset to 0 successfully"
+else
+    log_error "Failed to reset GRUB_DEFAULT"
+fi
+
+# Update GRUB configuration
+log_info "Updating GRUB configuration..."
+if update-grub >/dev/null 2>&1; then
+    log_info "GRUB configuration updated successfully"
+else
+    log_error "GRUB update failed (exit code: $?)"
+fi
+
+# Disable cleanup service
+log_info "Disabling cleanup service..."
+if systemctl disable zfs-firstboot-cleanup.service >/dev/null 2>&1; then
+    log_info "Cleanup service disabled successfully"
+else
+    log_error "Failed to disable cleanup service (exit code: $?)"
+fi
+
+log_info "=== ZFS First-Boot Cleanup Complete ==="
+log_info "Future boots will use standard ZFS imports without force flags"
+EOF
+
+chmod +x /mnt/usr/local/bin/zfs-firstboot-cleanup
+
+# Create simple systemd service that calls the external script
 cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'EOF'
 [Unit]
 Description=Remove ZFS first-boot force import configuration after successful boot
@@ -2803,67 +2916,7 @@ ConditionPathExists=/.zfs-force-import-firstboot
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c '
-    # Set up logging function
-    log_info() { logger -t "zfs-firstboot-cleanup" -p user.info "$1"; echo "$1"; }
-    log_error() { logger -t "zfs-firstboot-cleanup" -p user.err "$1"; echo "ERROR: $1" >&2; }
-    log_warning() { logger -t "zfs-firstboot-cleanup" -p user.warning "$1"; echo "WARNING: $1"; }
-
-    log_info "=== ZFS First-Boot Cleanup Service Starting ==="
-    log_info "Hostname: $(hostname)"
-
-    # Log ZFS pool status
-    pool_status=$(zpool list -H -o name,health 2>/dev/null | tr "\t" " " | sed "s/^/  /")
-    if [[ -n "$pool_status" ]]; then
-        log_info "ZFS pool status:"
-        echo "$pool_status" | while read line; do log_info "$line"; done
-    else
-        log_warning "No ZFS pools found"
-    fi
-
-    log_info "Removing first-boot force import configuration..."
-
-    # Remove force import marker
-    if [[ -f /.zfs-force-import-firstboot ]]; then
-        if rm -f /.zfs-force-import-firstboot; then
-            log_info "Removed force import marker: /.zfs-force-import-firstboot"
-        else
-            log_error "Failed to remove force import marker: /.zfs-force-import-firstboot"
-        fi
-    else
-        log_info "Force import marker not found (already removed)"
-    fi
-
-    # Remove GRUB first-boot script
-    if [[ -f /etc/grub.d/99_zfs_firstboot ]]; then
-        if rm -f /etc/grub.d/99_zfs_firstboot; then
-            log_info "Removed GRUB first-boot script: /etc/grub.d/99_zfs_firstboot"
-        else
-            log_error "Failed to remove GRUB first-boot script: /etc/grub.d/99_zfs_firstboot"
-        fi
-    else
-        log_info "GRUB first-boot script not found (already removed)"
-    fi
-
-    # Update GRUB configuration
-    log_info "Updating GRUB configuration..."
-    if update-grub >/dev/null 2>&1; then
-        log_info "GRUB configuration updated successfully"
-    else
-        log_error "GRUB update failed (exit code: $?)"
-    fi
-
-    # Disable cleanup service
-    log_info "Disabling cleanup service..."
-    if systemctl disable zfs-firstboot-cleanup.service >/dev/null 2>&1; then
-        log_info "Cleanup service disabled successfully"
-    else
-        log_error "Failed to disable cleanup service (exit code: $?)"
-    fi
-
-    log_info "=== ZFS First-Boot Cleanup Complete ==="
-    log_info "Future boots will use standard ZFS imports without force flags"
-'
+ExecStart=/usr/local/bin/zfs-firstboot-cleanup
 RemainAfterExit=yes
 
 [Install]
