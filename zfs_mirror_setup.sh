@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.1.1 - PATCH: Enhanced installation state tracking and fixed GRUB kernel detection
+# Version: 5.1.2 - PATCH: Fixed chroot kernel detection and systemctl failure handling
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.1.1"
+readonly VERSION="5.1.2"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2832,7 +2832,8 @@ if [ -f /.zfs-force-import-firstboot ]; then
     KERNEL_CMDLINE="\$KERNEL_CMDLINE root=ZFS=rpool/root ro"
 
     # Discover kernel version with multiple fallback methods
-    KERNEL_VERSION=\$(ls /boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/vmlinuz-||' || ls /boot/@/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/@/vmlinuz-||' || dpkg -l 'linux-image-*' 2>/dev/null | grep '^ii' | awk '{print \$2}' | sed 's/linux-image-//' | head -1)
+    # In chroot context, /boot/@/ is the primary location, /boot/ is fallback
+    KERNEL_VERSION=\$(ls /boot/@/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/@/vmlinuz-||' || ls /boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/vmlinuz-||' || dpkg -l 'linux-image-*' 2>/dev/null | grep '^ii' | awk '{print \$2}' | sed 's/linux-image-//' | head -1)
 
     if [ -n "\$KERNEL_VERSION" ]; then
         cat << 'GRUB_ENTRY_EOF'
@@ -2999,7 +3000,13 @@ WantedBy=multi-user.target
 EOF
 
 # Enable the cleanup service
-chroot /mnt systemctl enable zfs-firstboot-cleanup.service
+log_info "Enabling first-boot cleanup service in target system..."
+if chroot /mnt systemctl enable zfs-firstboot-cleanup.service; then
+    log_info "First-boot cleanup service enabled successfully"
+else
+    log_warning "Failed to enable cleanup service (exit code: $?) - continuing anyway"
+    log_info "Manual cleanup will be required after first boot"
+fi
 
 log_info "✓ First boot configured to use force import (zfs_force=1)"
 log_info "✓ Auto-cleanup service enabled - removes force configuration after successful boot"

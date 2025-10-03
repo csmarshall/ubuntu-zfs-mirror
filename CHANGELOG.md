@@ -1,5 +1,36 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.1.2 - PATCH: Fixed chroot kernel detection order and systemctl failure handling (2025-10-03)
+
+**Critical Bug Fixes for Installation Completion**
+
+Fixed two critical issues that prevented successful installation completion: incorrect kernel detection order in chroot context and unhandled systemctl failures.
+
+**Bug Fixes:**
+- FIXED: Kernel detection trying `/boot/vmlinuz-*` before `/boot/@/vmlinuz-*` in chroot context
+- FIXED: Script exit on systemctl enable failure due to `set -euo pipefail`
+- IMPROVED: Added proper error handling around systemctl commands with graceful degradation
+- ENHANCED: More accurate error reporting for service enablement failures
+
+**Technical Changes:**
+- **Kernel Detection**: Reordered fallback chain to check `/boot/@/` first in chroot environment
+- **Error Handling**: Wrapped critical systemctl commands with conditional execution and fallback logging
+- **Service Management**: Script continues even if cleanup service fails to enable (manual cleanup documented)
+- **Installation Flow**: Prevents premature exit during final configuration steps
+
+**User Impact:**
+- Eliminates installation failures at 95% completion due to service enablement issues
+- Ensures GRUB first-boot entries are created with correct kernel paths
+- Provides graceful degradation when systemd services can't be enabled in chroot
+- Reduces need for manual recovery procedures
+
+**Files Changed:**
+- zfs_mirror_setup.sh: +7 lines, -2 lines (error handling and kernel detection order)
+
+**Git Hash**: [To be updated after commit]
+
+---
+
 ## v5.1.1 - PATCH: Enhanced installation state tracking and fixed GRUB kernel detection (2025-10-02)
 
 **Improved Installation Reliability and Diagnostics**

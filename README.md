@@ -474,7 +474,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 5.0.0 - Simplified first-boot force import with ZFS native integration
+- **Script Version**: 5.1.2 - Fixed chroot kernel detection and systemctl failure handling
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
