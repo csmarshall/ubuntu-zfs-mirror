@@ -1521,25 +1521,44 @@ cleanup_on_exit() {
     
     if [[ ${exit_code} -ne 0 ]] && [[ "${INSTALL_STATE}" != "completed" ]]; then
         log_warning "Installation interrupted at state: ${INSTALL_STATE}"
-                
+
+        # Ask user whether to clean up or leave environment for debugging
+        if [[ -t 0 ]] && [[ "${POOLS_CREATED}" == "yes" ]]; then
+            echo ""
+            echo -e "${YELLOW}Installation failed. Choose cleanup option:${NC}"
+            echo "1) Clean up and exit (unmount everything)"
+            echo "2) Leave environment mounted for debugging"
+            read -p "Choice (1/2): " -r cleanup_choice
+            case "$cleanup_choice" in
+                2)
+                    log_info "Leaving environment mounted at /mnt for debugging"
+                    log_info "To clean up later run: sudo umount -lR /mnt && sudo zpool export -a"
+                    log_info "To remount: sudo zpool import -f rpool && sudo zpool import -f bpool && sudo zfs mount -a"
+                    echo ""
+                    log_error "Installation failed - check log: ${LOG_FILE}"
+                    exit ${exit_code}
+                    ;;
+            esac
+        fi
+
         # Cleanup chroot mounts
         if [[ "${CHROOT_ACTIVE}" == "yes" ]]; then
             log_debug "Cleaning up chroot mounts"
             umount /mnt/dev /mnt/proc /mnt/sys /mnt/run 2>/dev/null || true
         fi
-                
+
         # Cleanup ZFS pools
         if [[ "${POOLS_CREATED}" == "yes" ]]; then
             log_debug "Cleaning up ZFS pools"
             zpool export -a 2>/dev/null || true
         fi
-                
+
         # Cleanup temporary mounts
         if [[ "${MOUNTS_ACTIVE}" == "yes" ]]; then
             log_debug "Cleaning up temporary mounts"
             umount -lR /mnt 2>/dev/null || true
         fi
-                
+
         echo ""
         log_error "Installation failed - check log: ${LOG_FILE}"
     fi
@@ -2808,7 +2827,7 @@ echo 'ZPOOL_IMPORT_OPTS="-f"' >> /mnt/etc/default/zfs
 chroot /mnt update-grub
 
 # Create GRUB script using script variables (much more reliable than parsing)
-cat > /mnt/etc/grub.d/99_zfs_firstboot << GRUB_SCRIPT_EOF
+cat > /mnt/etc/grub.d/99_zfs_firstboot << 'GRUB_SCRIPT_EOF'
 #!/bin/sh
 # ZFS First-Boot Force Import Configuration
 # Creates a well-formed Ubuntu entry with zfs_force=1 using installation variables
@@ -2818,15 +2837,11 @@ if [ -f /.zfs-force-import-firstboot ]; then
     # Build kernel command line using same logic as main GRUB config
     KERNEL_CMDLINE="zfs_force=1"
 
-    # Add serial console if configured
-    if [ "${USE_SERIAL_CONSOLE:-false}" = "true" ]; then
-        KERNEL_CMDLINE="$KERNEL_CMDLINE console=tty1 console=${SERIAL_PORT:-ttyS1},${SERIAL_SPEED:-115200}"
-    fi
+    # Add serial console (hardcoded based on installation settings)
+    KERNEL_CMDLINE="$KERNEL_CMDLINE console=tty1 console=ttyS1,115200"
 
-    # Add AppArmor setting if disabled
-    if [ "${USE_APPARMOR:-true}" = "false" ]; then
-        KERNEL_CMDLINE="$KERNEL_CMDLINE apparmor=0"
-    fi
+    # Add AppArmor setting (hardcoded based on installation settings)
+    KERNEL_CMDLINE="$KERNEL_CMDLINE apparmor=0"
 
     # Add root filesystem
     KERNEL_CMDLINE="$KERNEL_CMDLINE root=ZFS=\"rpool/root\" ro"

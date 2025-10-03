@@ -171,7 +171,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **5.1.4** (as of 2025-10-03)
+- Current version: **5.1.6** (as of 2025-10-03)
 
 **⚠️ CRITICAL: Version Synchronization Required**
 When updating version numbers, you **MUST** update ALL of these locations:

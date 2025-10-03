@@ -1,5 +1,34 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.1.6 - PATCH: Fixed GRUB kernel command line variable expansion and root dataset format (2025-10-03)
+
+**Critical Fix for GRUB First-Boot Entry Generation**
+
+Fixed variable expansion issues preventing the first-boot GRUB entry from generating correctly, eliminating "No root device specified" boot failures.
+
+**Root Cause Analysis:**
+- Outer heredoc was expanding installation variables during script generation
+- Inner GRUB entry used incorrect variable syntax preventing kernel command line expansion
+- Hard-coded values needed for single-use first-boot entry
+
+**Bug Fixes:**
+- **Quoted Outer Heredoc** (Line 2811): Prevent expansion of installation variables during script creation
+- **Hard-coded Values** (Lines 2822-2825): Use fixed serial console and AppArmor settings for first-boot entry
+- **Variable Expansion** (Lines 2822-2828): Remove backslashes to allow proper KERNEL_CMDLINE building
+- **Root Dataset Format** (Line 2828): Use `root=ZFS="rpool/root"` with quotes to match existing entries
+- **Interactive Cleanup** (Lines 1526-1542): Add prompt to leave environment mounted for debugging
+
+**Technical Implementation:**
+- Split heredoc approach preserves GRUB variables while expanding kernel command line
+- First-boot entry generates: `root=ZFS="rpool/root" ro zfs_force=1 console=tty1 console=ttyS1,115200 apparmor=0`
+- Cleanup prompt allows debugging failed installations without losing ZFS environment
+
+**Impact:** First boot now works reliably with automatic pool import and proper cleanup.
+
+**Changes:** +25, -8 lines
+
+---
+
 ## v5.1.4 - PATCH: Fixed GRUB default boot entry to use force import on first boot (2025-10-03)
 
 **Critical Fix for GRUB Default Boot Selection**

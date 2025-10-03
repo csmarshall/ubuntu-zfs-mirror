@@ -474,7 +474,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 5.1.4 - Fixed GRUB default boot entry to use force import on first boot
+- **Script Version**: 5.1.6 - Fixed GRUB kernel command line variable expansion and root dataset format
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
