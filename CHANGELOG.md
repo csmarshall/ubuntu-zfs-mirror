@@ -1,5 +1,30 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.1.4 - PATCH: Fixed GRUB default boot entry to use force import on first boot (2025-10-03)
+
+**Critical Fix for GRUB Default Boot Selection**
+
+Simplified GRUB default entry logic to reliably set the first-boot force import entry as default.
+
+**Root Cause Analysis:**
+The script was attempting to extract the menuentry title from grub.cfg but this was unreliable and often failed, causing the first-boot force import entry to not be set as default.
+
+**Bug Fixes:**
+- **Simplified Logic** (Line 2873-2880): Removed complex title extraction, directly use menuentry ID `gnulinux-zfs-firstboot`
+- **Reliable Default** (Line 2875): Always sets the force import entry as GRUB_DEFAULT for first boot
+- **Eliminated Fallback** (Line 2883-2891): Removed unnecessary fallback logic since direct ID is reliable
+
+**Technical Implementation:**
+- Direct use of menuentry ID ensures reliable default selection
+- Eliminates grep/sed parsing failures that could prevent proper default setting
+- Guarantees first-boot force import entry is selected automatically
+
+**Impact:** First boot will now reliably use the force import entry automatically, eliminating manual menu selection.
+
+**Changes:** +3, -18 lines
+
+---
+
 ## v5.1.3 - PATCH: Fixed GRUB kernel detection with dynamic runtime detection (2025-10-03)
 
 **Critical Fix for GRUB First-Boot Entry Generation**

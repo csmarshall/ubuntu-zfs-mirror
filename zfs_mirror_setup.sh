@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.1.3 - PATCH: Fixed GRUB kernel detection with dynamic runtime detection
+# Version: 5.1.5 - PATCH: Fixed GRUB kernel command line expansion for reliable first boot
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.1.3"
+readonly VERSION="5.1.5"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2832,30 +2832,29 @@ if [ -f /.zfs-force-import-firstboot ]; then
     KERNEL_CMDLINE="\$KERNEL_CMDLINE root=ZFS=rpool/root ro"
 
     # Use dynamic kernel detection at GRUB runtime instead of script generation time
-    cat << 'GRUB_ENTRY_EOF'
+    cat << GRUB_ENTRY_EOF
 # ZFS first-boot force import menu entry (auto-generated, auto-removed)
-menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-zfs-firstboot' {
+menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --class gnu-linux --class gnu --class os \\\$menuentry_id_option 'gnulinux-zfs-firstboot' {
     recordfail
     load_video
-    gfxmode \$linux_gfx_mode
+    gfxmode \\\$linux_gfx_mode
     insmod gzio
-    if [ x\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+    if [ x\\\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
     insmod part_gpt
     insmod zfs
     search --no-floppy --fs-uuid --set=root
 
-    # Find latest kernel dynamically at boot time
+    # Find latest kernel dynamically at boot time using GRUB-compatible syntax
     for kernel in /boot/@/vmlinuz-*; do
-        if [ -f "\$kernel" ]; then
-            kernelversion=\${kernel#/boot/@/vmlinuz-}
-            break
+        if [ -f "\\\$kernel" ]; then
+            # Use GRUB regexp to extract version from kernel path
+            if regexp --set=kernelversion '^/boot/@/vmlinuz-(.*)' "\\\$kernel"; then
+                linux "/boot/@/vmlinuz-\\\$kernelversion" ${KERNEL_CMDLINE}
+                initrd "/boot/@/initrd.img-\\\$kernelversion"
+                break
+            fi
         fi
     done
-
-    if [ -n "\$kernelversion" ]; then
-        linux "/boot/@/vmlinuz-\$kernelversion" \$KERNEL_CMDLINE
-        initrd "/boot/@/initrd.img-\$kernelversion"
-    fi
 }
 GRUB_ENTRY_EOF
 else
@@ -2871,24 +2870,13 @@ chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 log_info "Generating GRUB configuration with first-boot force import entry..."
 chroot /mnt update-grub
 
-# Extract the title of our new force import entry and set it as default
-FORCE_IMPORT_TITLE=$(chroot /mnt grep -o "menuentry '[^']*First boot force zfs import'" /boot/grub/grub.cfg | sed "s/menuentry '//;s/'//" | head -1)
-if [[ -n "${FORCE_IMPORT_TITLE}" ]]; then
-    log_info "Setting force import entry as default: ${FORCE_IMPORT_TITLE}"
-    if set_grub_default "/mnt/etc/default/grub" "${FORCE_IMPORT_TITLE}"; then
-        chroot /mnt update-grub
-    else
-        log_error "Failed to set GRUB default to force import entry"
-        exit 1
-    fi
+# Set the force import entry as default using its menuentry ID
+log_info "Setting force import entry as default: gnulinux-zfs-firstboot"
+if set_grub_default "/mnt/etc/default/grub" "gnulinux-zfs-firstboot"; then
+    chroot /mnt update-grub
 else
-    log_warning "Could not find force import entry title, using fallback"
-    if set_grub_default "/mnt/etc/default/grub" "gnulinux-zfs-firstboot"; then
-        chroot /mnt update-grub
-    else
-        log_error "Failed to set GRUB default to fallback entry"
-        exit 1
-    fi
+    log_error "Failed to set GRUB default to force import entry"
+    exit 1
 fi
 
 # Use the sync script to ensure GRUB is installed on all ZFS mirror drives
