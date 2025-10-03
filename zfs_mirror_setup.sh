@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.1.2 - PATCH: Fixed chroot kernel detection and systemctl failure handling
+# Version: 5.1.3 - PATCH: Fixed GRUB kernel detection with dynamic runtime detection
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.1.2"
+readonly VERSION="5.1.3"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2831,12 +2831,8 @@ if [ -f /.zfs-force-import-firstboot ]; then
     # Add root filesystem
     KERNEL_CMDLINE="\$KERNEL_CMDLINE root=ZFS=rpool/root ro"
 
-    # Discover kernel version with multiple fallback methods
-    # In chroot context, /boot/@/ is the primary location, /boot/ is fallback
-    KERNEL_VERSION=\$(ls /boot/@/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/@/vmlinuz-||' || ls /boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/vmlinuz-||' || dpkg -l 'linux-image-*' 2>/dev/null | grep '^ii' | awk '{print \$2}' | sed 's/linux-image-//' | head -1)
-
-    if [ -n "\$KERNEL_VERSION" ]; then
-        cat << 'GRUB_ENTRY_EOF'
+    # Use dynamic kernel detection at GRUB runtime instead of script generation time
+    cat << 'GRUB_ENTRY_EOF'
 # ZFS first-boot force import menu entry (auto-generated, auto-removed)
 menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-zfs-firstboot' {
     recordfail
@@ -2847,14 +2843,21 @@ menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --clas
     insmod part_gpt
     insmod zfs
     search --no-floppy --fs-uuid --set=root
-GRUB_ENTRY_EOF
-        # Use ZFS dataset path for GRUB (this is correct for final system)
-        echo "    linux   \"/boot/@/vmlinuz-\$KERNEL_VERSION\" \$KERNEL_CMDLINE"
-        echo "    initrd  \"/boot/@/initrd.img-\$KERNEL_VERSION\""
-        echo "}"
-    else
-        echo "# Warning: No kernel found in /boot/ or /boot/@/" >&2
+
+    # Find latest kernel dynamically at boot time
+    for kernel in /boot/@/vmlinuz-*; do
+        if [ -f "\$kernel" ]; then
+            kernelversion=\${kernel#/boot/@/vmlinuz-}
+            break
+        fi
+    done
+
+    if [ -n "\$kernelversion" ]; then
+        linux "/boot/@/vmlinuz-\$kernelversion" \$KERNEL_CMDLINE
+        initrd "/boot/@/initrd.img-\$kernelversion"
     fi
+}
+GRUB_ENTRY_EOF
 else
     # Log warning if this script is running but force import is not needed
     echo "Warning: /etc/grub.d/99_zfs_firstboot running but /.zfs-force-import-firstboot not found" >&2

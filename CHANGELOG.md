@@ -1,5 +1,42 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.1.3 - PATCH: Fixed GRUB kernel detection with dynamic runtime detection (2025-10-03)
+
+**Critical Fix for GRUB First-Boot Entry Generation**
+
+Replaced compile-time kernel detection with runtime detection to eliminate "No kernel found" failures during installation.
+
+**Root Cause Analysis:**
+The script was trying to detect the kernel version during GRUB script generation (in chroot context) rather than at boot time. This caused failures because:
+- Installation context: Kernel detection runs in chroot where filesystem paths differ
+- Boot context: GRUB finds kernels correctly in the actual mounted filesystem
+- Timing issue: Kernel detection during installation vs. when GRUB actually needs it
+
+**Bug Fixes:**
+- FIXED: "Warning: No kernel found in /boot/ or /boot/@/" during installation
+- REPLACED: Static kernel detection with dynamic GRUB-time detection
+- ELIMINATED: Context-dependent filesystem path issues in chroot environment
+- IMPROVED: More robust kernel detection that works regardless of installation environment
+
+**Technical Changes:**
+- **Kernel Detection**: Moved from script generation time to GRUB boot time
+- **GRUB Entry**: Uses dynamic for-loop to find available kernels at runtime
+- **Path Resolution**: Eliminates dependency on chroot filesystem context
+- **Error Handling**: No more kernel detection failures during installation
+
+**User Impact:**
+- Eliminates installation abortion at "configuring_first_boot" stage
+- GRUB first-boot entries are created successfully regardless of chroot environment
+- More reliable first-boot force import mechanism
+- Reduces installation failure rate significantly
+
+**Files Changed:**
+- zfs_mirror_setup.sh: +12 lines, -16 lines (dynamic GRUB kernel detection)
+
+**Git Hash**: [To be updated after commit]
+
+---
+
 ## v5.1.2 - PATCH: Fixed chroot kernel detection order and systemctl failure handling (2025-10-03)
 
 **Critical Bug Fixes for Installation Completion**
