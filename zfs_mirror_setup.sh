@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.1.5 - PATCH: Fixed GRUB kernel command line expansion for reliable first boot
+# Version: 5.1.6 - PATCH: Fixed GRUB kernel command line variable expansion and root dataset format
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.1.5"
+readonly VERSION="5.1.6"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2820,37 +2820,40 @@ if [ -f /.zfs-force-import-firstboot ]; then
 
     # Add serial console if configured
     if [ "${USE_SERIAL_CONSOLE:-false}" = "true" ]; then
-        KERNEL_CMDLINE="\$KERNEL_CMDLINE console=tty1 console=${SERIAL_PORT:-ttyS1},${SERIAL_SPEED:-115200}"
+        KERNEL_CMDLINE="$KERNEL_CMDLINE console=tty1 console=${SERIAL_PORT:-ttyS1},${SERIAL_SPEED:-115200}"
     fi
 
     # Add AppArmor setting if disabled
     if [ "${USE_APPARMOR:-true}" = "false" ]; then
-        KERNEL_CMDLINE="\$KERNEL_CMDLINE apparmor=0"
+        KERNEL_CMDLINE="$KERNEL_CMDLINE apparmor=0"
     fi
 
     # Add root filesystem
-    KERNEL_CMDLINE="\$KERNEL_CMDLINE root=ZFS=rpool/root ro"
+    KERNEL_CMDLINE="$KERNEL_CMDLINE root=ZFS=\"rpool/root\" ro"
 
-    # Use dynamic kernel detection at GRUB runtime instead of script generation time
-    cat << GRUB_ENTRY_EOF
+    # Generate GRUB entry with quoted heredoc to preserve GRUB variables
+    cat << 'GRUB_ENTRY_EOF'
 # ZFS first-boot force import menu entry (auto-generated, auto-removed)
-menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --class gnu-linux --class gnu --class os \\\$menuentry_id_option 'gnulinux-zfs-firstboot' {
+menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --class gnu-linux --class gnu --class os ${menuentry_id_option} 'gnulinux-zfs-firstboot' {
     recordfail
     load_video
-    gfxmode \\\$linux_gfx_mode
+    gfxmode ${linux_gfx_mode}
     insmod gzio
-    if [ x\\\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+    if [ x${grub_platform} = xxen ]; then insmod xzio; insmod lzopio; fi
     insmod part_gpt
     insmod zfs
     search --no-floppy --fs-uuid --set=root
 
     # Find latest kernel dynamically at boot time using GRUB-compatible syntax
     for kernel in /boot/@/vmlinuz-*; do
-        if [ -f "\\\$kernel" ]; then
+        if [ -f "${kernel}" ]; then
             # Use GRUB regexp to extract version from kernel path
-            if regexp --set=kernelversion '^/boot/@/vmlinuz-(.*)' "\\\$kernel"; then
-                linux "/boot/@/vmlinuz-\\\$kernelversion" ${KERNEL_CMDLINE}
-                initrd "/boot/@/initrd.img-\\\$kernelversion"
+            if regexp --set=kernelversion '^/boot/@/vmlinuz-(.*)' "${kernel}"; then
+GRUB_ENTRY_EOF
+    # Insert the expanded kernel command line
+    echo "                linux \"/boot/@/vmlinuz-\${kernelversion}\" $KERNEL_CMDLINE"
+    echo "                initrd \"/boot/@/initrd.img-\${kernelversion}\""
+    cat << 'GRUB_ENTRY_EOF'
                 break
             fi
         fi
