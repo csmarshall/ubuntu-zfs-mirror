@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.2.0 - MAJOR: Implemented backup/restore cleanup with automatic reboot for bulletproof first boot
+# Version: 5.2.1 - PATCH: Fixed GRUB backup timing and added validation to ensure clean configuration backup
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.2.0"
+readonly VERSION="5.2.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2823,8 +2823,45 @@ touch /mnt/.zfs-force-import-firstboot
 # Create ZFS import configuration for bpool force import
 echo 'ZPOOL_IMPORT_OPTS="-f"' >> /mnt/etc/default/zfs
 
-# Generate initial GRUB config to get the default entry
+# Generate initial clean GRUB config (without first-boot entry)
 chroot /mnt update-grub
+
+# Backup the clean GRUB configuration before adding first-boot entry
+log_info "Backing up clean GRUB configuration..."
+cp /mnt/boot/grub/grub.cfg /mnt/boot/grub/grub.cfg.orig
+cp /mnt/etc/default/grub /mnt/etc/default/grub.orig
+
+# Validate backup contains clean configuration (no first-boot entries)
+log_info "Validating backup contains clean GRUB configuration..."
+if grep -q "First boot force zfs import" /mnt/boot/grub/grub.cfg.orig; then
+    log_error "ERROR: Backup contains first-boot entries - backup timing is wrong!"
+    exit 1
+fi
+
+if grep -q "99_zfs_firstboot" /mnt/boot/grub/grub.cfg.orig; then
+    log_error "ERROR: Backup contains first-boot script references - backup timing is wrong!"
+    exit 1
+fi
+
+if grep -q "gnulinux-zfs-firstboot" /mnt/boot/grub/grub.cfg.orig; then
+    log_error "ERROR: Backup contains first-boot menu ID - backup timing is wrong!"
+    exit 1
+fi
+
+# Show what GRUB entries are in the backup
+log_info "GRUB entries found in backup:"
+grep "^menuentry " /mnt/boot/grub/grub.cfg.orig | sed "s/^/  /" | while read line; do
+    log_info "$line"
+done
+
+# Validate backup contains normal Ubuntu entries
+if ! grep -q "Ubuntu.*LTS" /mnt/boot/grub/grub.cfg.orig; then
+    log_warning "WARNING: Backup may not contain Ubuntu kernel entries"
+else
+    log_info "✓ Ubuntu kernel entries found in backup"
+fi
+
+log_info "✓ Backup validation passed - clean configuration confirmed"
 
 # Create GRUB script using script variables (much more reliable than parsing)
 cat > /mnt/etc/grub.d/99_zfs_firstboot << 'GRUB_SCRIPT_EOF'
@@ -2884,20 +2921,11 @@ GRUB_SCRIPT_EOF
 
 chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 
-# Backup original configurations before modification
-log_info "Backing up original GRUB configuration..."
-cp /mnt/etc/default/grub /mnt/etc/default/grub.orig
 
-# Update GRUB to include the force import entry
-log_info "Generating GRUB configuration with first-boot force import entry..."
-chroot /mnt update-grub
-
-# Backup the working GRUB config before adding first-boot entry
-cp /mnt/boot/grub/grub.cfg /mnt/boot/grub/grub.cfg.orig
-
-# Set the force import entry as default using its menuentry ID
-log_info "Setting force import entry as default: gnulinux-zfs-firstboot"
+# Now add the first-boot entry and regenerate
+log_info "Adding first-boot entry and setting as default..."
 if set_grub_default "/mnt/etc/default/grub" "gnulinux-zfs-firstboot"; then
+    log_info "Regenerating GRUB configuration with first-boot entry as default..."
     chroot /mnt update-grub
 else
     log_error "Failed to set GRUB default to force import entry"

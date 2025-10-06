@@ -1,5 +1,32 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.2.1 - PATCH: Fixed GRUB backup timing and added validation to ensure clean configuration backup (2025-10-06)
+
+**Critical Fix for GRUB Backup Timing Issue**
+
+Fixed backup timing that was causing first-boot cleanup to restore GRUB configuration containing first-boot entries instead of clean Ubuntu kernel entries.
+
+**Root Cause Analysis:**
+The backup was happening after the first-boot GRUB script was created and included in the GRUB configuration, causing the restored configuration to still contain first-boot entries, resulting in boot menus with only memtest entries.
+
+**Bug Fixes:**
+- **Backup Timing** (Lines 2829-2832): Moved backup to occur immediately after clean GRUB generation, before first-boot script creation
+- **Validation System** (Lines 2834-2864): Added comprehensive validation to ensure backup contains clean configuration
+- **Entry Verification** (Lines 2852-2855): Log all GRUB entries found in backup for debugging
+- **Contamination Detection** (Lines 2836-2849): Fail fast if any first-boot entries detected in backup
+
+**Technical Implementation:**
+- Backup occurs after line 2827 `update-grub` (clean) and before line 2867 first-boot script creation
+- Validation checks for "First boot force zfs import", "99_zfs_firstboot", "gnulinux-zfs-firstboot"
+- Positive validation confirms Ubuntu LTS entries exist in backup
+- Clear logging shows exactly what GRUB entries are backed up
+
+**Impact:** First-boot cleanup now reliably restores normal Ubuntu kernel menu instead of memtest-only menu.
+
+**Changes:** +30, -0 lines
+
+---
+
 ## v5.2.0 - MAJOR: Implemented backup/restore cleanup with automatic reboot for bulletproof first boot (2025-10-06)
 
 **Revolutionary First-Boot System with Automatic Reboot**
