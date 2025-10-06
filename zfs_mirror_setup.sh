@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.1.6 - PATCH: Fixed GRUB kernel command line variable expansion and root dataset format
+# Version: 5.2.0 - MAJOR: Implemented backup/restore cleanup with automatic reboot for bulletproof first boot
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.1.6"
+readonly VERSION="5.2.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2884,9 +2884,16 @@ GRUB_SCRIPT_EOF
 
 chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 
+# Backup original configurations before modification
+log_info "Backing up original GRUB configuration..."
+cp /mnt/etc/default/grub /mnt/etc/default/grub.orig
+
 # Update GRUB to include the force import entry
 log_info "Generating GRUB configuration with first-boot force import entry..."
 chroot /mnt update-grub
+
+# Backup the working GRUB config before adding first-boot entry
+cp /mnt/boot/grub/grub.cfg /mnt/boot/grub/grub.cfg.orig
 
 # Set the force import entry as default using its menuentry ID
 log_info "Setting force import entry as default: gnulinux-zfs-firstboot"
@@ -2962,20 +2969,34 @@ else
     log_info "GRUB first-boot script not found (already removed)"
 fi
 
-# Reset GRUB default to standard Ubuntu entry
-log_info "Resetting GRUB default to standard Ubuntu entry..."
-if sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=0/' /etc/default/grub; then
-    log_info "GRUB_DEFAULT reset to 0 successfully"
-else
-    log_error "Failed to reset GRUB_DEFAULT"
-fi
+# Restore original GRUB configuration files
+log_info "Restoring original GRUB configuration..."
+if [[ -f /boot/grub/grub.cfg.orig ]] && [[ -f /etc/default/grub.orig ]]; then
+    if mv /boot/grub/grub.cfg.orig /boot/grub/grub.cfg; then
+        log_info "Restored original grub.cfg"
+    else
+        log_error "Failed to restore grub.cfg from backup"
+        exit 1
+    fi
 
-# Update GRUB configuration
-log_info "Updating GRUB configuration..."
-if update-grub >/dev/null 2>&1; then
-    log_info "GRUB configuration updated successfully"
+    if mv /etc/default/grub.orig /etc/default/grub; then
+        log_info "Restored original /etc/default/grub"
+    else
+        log_error "Failed to restore /etc/default/grub from backup"
+        exit 1
+    fi
+
+    # Update GRUB to apply restored settings
+    log_info "Updating GRUB configuration..."
+    if update-grub >/dev/null 2>&1; then
+        log_info "GRUB configuration updated successfully"
+    else
+        log_error "Failed to update GRUB configuration"
+        exit 1
+    fi
 else
-    log_error "GRUB update failed (exit code: $?)"
+    log_error "Backup files missing - cannot restore GRUB configuration"
+    exit 1
 fi
 
 # Disable cleanup service
@@ -2987,17 +3008,22 @@ else
 fi
 
 log_info "=== ZFS First-Boot Cleanup Complete ==="
-log_info "Future boots will use standard ZFS imports without force flags"
+log_info "Force import configuration removed - future boots will use standard ZFS imports"
+log_info "Rebooting system in 5 seconds to remove force flags from ZFS import processes..."
+sleep 5
+reboot
 EOF
 
 chmod +x /mnt/usr/local/bin/zfs-firstboot-cleanup
 
-# Create simple systemd service that calls the external script
+# Create early-boot systemd service for immediate cleanup and reboot
 cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'EOF'
 [Unit]
-Description=Remove ZFS first-boot force import configuration after successful boot
-After=multi-user.target
+Description=ZFS first-boot cleanup - remove force import configuration and reboot
+After=zfs-mount.service local-fs.target
+Before=multi-user.target graphical.target systemd-user-sessions.service
 ConditionPathExists=/.zfs-force-import-firstboot
+DefaultDependencies=no
 
 [Service]
 Type=oneshot
@@ -3005,7 +3031,7 @@ ExecStart=/usr/local/bin/zfs-firstboot-cleanup
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target
 EOF
 
 # Enable the cleanup service

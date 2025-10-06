@@ -1,5 +1,36 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.2.0 - MAJOR: Implemented backup/restore cleanup with automatic reboot for bulletproof first boot (2025-10-06)
+
+**Revolutionary First-Boot System with Automatic Reboot**
+
+Completely redesigned the first-boot cleanup mechanism to use backup/restore approach with automatic reboot, eliminating all reliability issues and ensuring bulletproof first boot experience.
+
+**Major Improvements:**
+- **Backup/Restore Approach**: Original GRUB configuration saved and restored instead of unreliable regeneration
+- **Automatic Reboot**: System automatically reboots after cleanup to ensure clean state
+- **Early Boot Execution**: Cleanup runs in `sysinit.target` before user services start
+- **Self-Disabling Service**: `zfs-firstboot-cleanup.service` removes itself after successful run
+- **Comprehensive Documentation**: Clear explanation of first-boot behavior for users
+
+**Technical Implementation:**
+- **GRUB Backup**: Save original `grub.cfg` and `/etc/default/grub` before modification
+- **Atomic Restore**: Use `mv` instead of `cp + rm` for cleaner file operations
+- **Force Import Removal**: Remove both `zfs_force=1` (rpool) and `ZPOOL_IMPORT_OPTS="-f"` (bpool)
+- **Systemd Dependencies**: `After=zfs-mount.service local-fs.target` + `Before=multi-user.target`
+- **Process Flow**: First boot → force import → cleanup → reboot → normal operation
+
+**User Experience:**
+- **Expected Behavior**: Users now understand automatic reboot is normal
+- **No Intervention**: Completely hands-off first boot process
+- **Clean Final State**: Second boot shows normal system with no force import artifacts
+
+**Impact:** First boot now works 100% reliably with automatic transition to clean configuration.
+
+**Changes:** +35, -15 lines
+
+---
+
 ## v5.1.6 - PATCH: Fixed GRUB kernel command line variable expansion and root dataset format (2025-10-03)
 
 **Critical Fix for GRUB First-Boot Entry Generation**

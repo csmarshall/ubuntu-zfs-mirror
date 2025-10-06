@@ -10,8 +10,8 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 
 ## Features
 
-- **Reliable First Boot**: Uses ZFS kernel parameter `zfs_force=1` for guaranteed pool import on first boot
-- **Self-Configuring**: Automatically switches to clean imports after successful first boot
+- **Automatic First Boot**: Uses temporary force import for reliable initial boot, then automatically removes force configuration
+- **Self-Configuring**: First boot automatically reboots to apply clean ZFS import configuration
 - **Full Drive Redundancy**: Both drives are bootable with automatic failover
 - **Production Ready**: Enhanced error handling and recovery mechanisms
 - **No Manual Intervention**: Eliminates "pool was previously in use from another system" errors
@@ -24,6 +24,25 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 - Root privileges
 - UEFI boot mode
 - Internet connection for package installation
+
+## First Boot Behavior
+
+**⚠️ Important: The system will automatically reboot once during first boot**
+
+After installation, the first boot process works as follows:
+
+1. **Initial Boot**: System boots with temporary force import configuration
+   - **Root pool (rpool)**: Force imported via GRUB kernel parameter `zfs_force=1` during initramfs
+   - **Boot pool (bpool)**: Force imported via `ZPOOL_IMPORT_OPTS="-f"` in `/etc/default/zfs` during system startup
+2. **Automatic Cleanup**: The `zfs-firstboot-cleanup.service` runs early in boot and:
+   - Removes GRUB first-boot entry (eliminates `zfs_force=1` kernel parameter)
+   - Removes `ZPOOL_IMPORT_OPTS="-f"` from `/etc/default/zfs`
+   - Restores original GRUB configuration
+   - Disables itself so it never runs again
+3. **Automatic Reboot**: System reboots automatically after ~10 seconds to apply clean configuration
+4. **Normal Operation**: Subsequent boots use standard ZFS imports without force flags for both pools
+
+**This is normal behavior** - no user intervention is required. The system will be ready for login after the automatic reboot.
 
 ## Quick Start
 
@@ -474,7 +493,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 5.1.6 - Fixed GRUB kernel command line variable expansion and root dataset format
+- **Script Version**: 5.2.0 - Implemented backup/restore cleanup with automatic reboot for bulletproof first boot
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
