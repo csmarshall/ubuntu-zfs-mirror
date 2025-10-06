@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.2.2 - PATCH: Fixed GRUB backup timing to capture clean post-installation state
+# Version: 5.2.3 - PATCH: Fixed GRUB backup to properly generate clean target system configuration
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.2.2"
+readonly VERSION="5.2.3"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2809,6 +2809,10 @@ fi
 # After successful first boot, the system automatically removes this configuration
 # and future boots use clean imports without force flags.
 
+# Generate clean GRUB configuration in target system first
+log_info "Generating clean GRUB configuration in target system..."
+chroot /mnt update-grub
+
 # Backup clean post-installation GRUB configuration before any first-boot modifications
 log_info "Backing up clean post-installation GRUB configuration..."
 cp /mnt/boot/grub/grub.cfg /mnt/boot/grub/grub.cfg.orig
@@ -2855,6 +2859,9 @@ if [ -f /.zfs-force-import-firstboot ]; then
     # Add root filesystem
     KERNEL_CMDLINE="$KERNEL_CMDLINE root=ZFS=\"rpool/root\" ro"
 
+    # Extract search command from working GRUB config to get proper UUID
+    SEARCH_CMD=$(grep "search --no-floppy --fs-uuid --set=root" /boot/grub/grub.cfg.orig | head -1 | sed 's/^[[:space:]]*//')
+
     # Generate GRUB entry with quoted heredoc to preserve GRUB variables
     cat << 'GRUB_ENTRY_EOF'
 # ZFS first-boot force import menu entry (auto-generated, auto-removed)
@@ -2866,7 +2873,10 @@ menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --clas
     if [ x${grub_platform} = xxen ]; then insmod xzio; insmod lzopio; fi
     insmod part_gpt
     insmod zfs
-    search --no-floppy --fs-uuid --set=root
+GRUB_ENTRY_EOF
+    # Insert the extracted search command with proper UUID
+    echo "    $SEARCH_CMD"
+    cat << 'GRUB_ENTRY_EOF'
 
     # Find latest kernel dynamically at boot time using GRUB-compatible syntax
     for kernel in /boot/@/vmlinuz-*; do
@@ -3063,10 +3073,8 @@ echo ""
 echo -e "${CYAN}2. After successful boot, the system will automatically remove${NC}"
 echo -e "   ${CYAN}the force import configuration for future boots.${NC}"
 echo ""
-echo -e "${CYAN}3. If you need to manually clean up the configuration:${NC}"
-echo -e "   ${GREEN}sudo rm -f /.zfs-force-import-firstboot${NC}"
-echo -e "   ${GREEN}sudo rm -f /etc/grub.d/99_zfs_firstboot${NC}"
-echo -e "   ${GREEN}sudo update-grub${NC}"
+echo -e "${CYAN}3. If automatic cleanup fails, manually run the cleanup script:${NC}"
+echo -e "   ${GREEN}sudo /usr/local/bin/zfs-firstboot-cleanup${NC}"
 echo ""
 
 show_progress 10 10 "Installation complete!"

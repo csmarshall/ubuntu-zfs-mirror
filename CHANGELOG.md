@@ -1,5 +1,31 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.2.3 - PATCH: Fixed GRUB backup to properly generate clean target system configuration (2025-10-06)
+
+**Critical Fix for GRUB Configuration Generation**
+
+Fixed fundamental issue where target system GRUB configuration was never properly generated before backup, causing restored configuration to be empty or incomplete.
+
+**Root Cause:**
+The backup was attempting to save `/mnt/boot/grub/grub.cfg` before any `chroot /mnt update-grub` had run to generate the target system's GRUB configuration with Ubuntu kernel entries.
+
+**Bug Fixes:**
+- **GRUB Generation** (Lines 2812-2814): Added `chroot /mnt update-grub` before backup to generate clean target system configuration
+- **Proper Sequence**: Now generates clean config → backs up clean config → creates first-boot script → regenerates with first-boot entry
+- **Target System Config**: Backup now captures actual Ubuntu kernel entries from target system instead of empty/incomplete config
+
+**Technical Implementation:**
+- First `chroot /mnt update-grub` generates clean Ubuntu kernel entries in target system
+- Backup captures this clean configuration with proper Ubuntu kernel entries
+- Second `chroot /mnt update-grub` adds first-boot entry to existing clean config
+- First-boot cleanup restores the backed-up clean configuration with Ubuntu kernels
+
+**Impact:** First-boot cleanup now properly restores Ubuntu kernel menu instead of empty/reduced menu.
+
+**Changes:** +3, -0 lines
+
+---
+
 ## v5.2.2 - PATCH: Fixed GRUB backup timing to capture clean post-installation state (2025-10-06)
 
 **Critical Fix for GRUB Backup Timing**
