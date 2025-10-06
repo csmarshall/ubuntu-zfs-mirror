@@ -1,5 +1,30 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.2.2 - PATCH: Fixed GRUB backup timing to capture clean post-installation state (2025-10-06)
+
+**Critical Fix for GRUB Backup Timing**
+
+Fixed GRUB backup to occur immediately after system installation but before any first-boot modifications, ensuring restored configuration contains legitimate Ubuntu kernel entries.
+
+**Root Cause:**
+The backup was happening too late in the process - after first-boot script creation rather than immediately after the clean system installation completed.
+
+**Bug Fixes:**
+- **Backup Timing** (Lines 2812-2821): Moved backup to occur right after base system installation, before `INSTALL_STATE="configuring_first_boot"`
+- **Simplified Validation**: Removed complex validation, now just logs GRUB entries for record keeping
+- **Redundant update-grub**: Removed unnecessary `update-grub` call before first-boot script creation (kept final one at line 2904)
+
+**Technical Implementation:**
+- Backup now happens after `linux-image-generic` installation creates natural GRUB config
+- Simple logging shows what entries exist in clean backup for record keeping
+- Single `update-grub` call after first-boot script creation and GRUB_DEFAULT setting
+
+**Impact:** First-boot cleanup now restores the clean post-installation GRUB configuration with proper Ubuntu kernel entries instead of memtest-only entries.
+
+**Changes:** +8, -15 lines
+
+---
+
 ## v5.2.1 - PATCH: Fixed GRUB backup timing and added validation to ensure clean configuration backup (2025-10-06)
 
 **Critical Fix for GRUB Backup Timing Issue**

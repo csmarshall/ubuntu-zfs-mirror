@@ -493,7 +493,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 5.2.1 - Fixed GRUB backup timing and added validation to ensure clean configuration backup
+- **Script Version**: 5.2.2 - Fixed GRUB backup timing to capture clean post-installation state
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
