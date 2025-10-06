@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.2.3 - PATCH: Fixed GRUB backup to properly generate clean target system configuration
+# Version: 5.2.4 - PATCH: Added GRUB validation and improved backup handling with .post-initial-install extension
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.2.3"
+readonly VERSION="5.2.4"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2809,18 +2809,14 @@ fi
 # After successful first boot, the system automatically removes this configuration
 # and future boots use clean imports without force flags.
 
-# Generate clean GRUB configuration in target system first
-log_info "Generating clean GRUB configuration in target system..."
-chroot /mnt update-grub
-
 # Backup clean post-installation GRUB configuration before any first-boot modifications
 log_info "Backing up clean post-installation GRUB configuration..."
-cp /mnt/boot/grub/grub.cfg /mnt/boot/grub/grub.cfg.orig
-cp /mnt/etc/default/grub /mnt/etc/default/grub.orig
+cp /mnt/boot/grub/grub.cfg /mnt/boot/grub/grub.cfg.post-initial-install
+cp /mnt/etc/default/grub /mnt/etc/default/grub.post-initial-install
 
 # Log what GRUB entries exist in the clean backup for record keeping
 log_info "GRUB entries found in clean post-installation backup:"
-grep "^menuentry " /mnt/boot/grub/grub.cfg.orig | sed "s/^/  /" | while read line; do
+grep "^menuentry " /mnt/boot/grub/grub.cfg.post-initial-install | sed "s/^/  /" | while read line; do
     log_info "$line"
 done
 
@@ -2860,7 +2856,7 @@ if [ -f /.zfs-force-import-firstboot ]; then
     KERNEL_CMDLINE="$KERNEL_CMDLINE root=ZFS=\"rpool/root\" ro"
 
     # Extract search command from working GRUB config to get proper UUID
-    SEARCH_CMD=$(grep "search --no-floppy --fs-uuid --set=root" /boot/grub/grub.cfg.orig | head -1 | sed 's/^[[:space:]]*//')
+    SEARCH_CMD=$(grep "search --no-floppy --fs-uuid --set=root" /boot/grub/grub.cfg.post-initial-install | head -1 | sed 's/^[[:space:]]*//')
 
     # Generate GRUB entry with quoted heredoc to preserve GRUB variables
     cat << 'GRUB_ENTRY_EOF'
@@ -2979,34 +2975,76 @@ else
     log_info "GRUB first-boot script not found (already removed)"
 fi
 
-# Restore original GRUB configuration files
-log_info "Restoring original GRUB configuration..."
-if [[ -f /boot/grub/grub.cfg.orig ]] && [[ -f /etc/default/grub.orig ]]; then
-    if mv /boot/grub/grub.cfg.orig /boot/grub/grub.cfg; then
-        log_info "Restored original grub.cfg"
-    else
-        log_error "Failed to restore grub.cfg from backup"
+# Validate backup files before restoring
+log_info "Validating backup GRUB configuration..."
+if [[ -f /boot/grub/grub.cfg.post-initial-install ]] && [[ -f /etc/default/grub.post-initial-install ]]; then
+    # Check that backup has Ubuntu kernel entries
+    ubuntu_entries=$(grep -c "menuentry.*Ubuntu.*LTS\|menuentry.*linux" /boot/grub/grub.cfg.post-initial-install 2>/dev/null || echo "0")
+    log_info "Backup contains $ubuntu_entries Ubuntu kernel entries"
+
+    if [[ "$ubuntu_entries" -eq 0 ]]; then
+        log_error "CRITICAL: Backup GRUB config has no Ubuntu kernel entries!"
+        log_error "Restoring this would create an unbootable system"
+        log_error "Keeping current config and aborting cleanup"
         exit 1
     fi
 
-    if mv /etc/default/grub.orig /etc/default/grub; then
-        log_info "Restored original /etc/default/grub"
-    else
-        log_error "Failed to restore /etc/default/grub from backup"
-        exit 1
-    fi
-
-    # Update GRUB to apply restored settings
-    log_info "Updating GRUB configuration..."
-    if update-grub >/dev/null 2>&1; then
-        log_info "GRUB configuration updated successfully"
-    else
-        log_error "Failed to update GRUB configuration"
-        exit 1
-    fi
+    log_info "✓ Backup validation passed - safe to restore"
 else
     log_error "Backup files missing - cannot restore GRUB configuration"
+    log_error "Required files: /boot/grub/grub.cfg.post-initial-install, /etc/default/grub.post-initial-install"
     exit 1
+fi
+
+# Restore original GRUB configuration files (copy instead of move to preserve backups)
+log_info "Restoring original GRUB configuration..."
+if cp /boot/grub/grub.cfg.post-initial-install /boot/grub/grub.cfg; then
+    log_info "Restored original grub.cfg (backup preserved)"
+else
+    log_error "Failed to restore grub.cfg from backup"
+    exit 1
+fi
+
+if cp /etc/default/grub.post-initial-install /etc/default/grub; then
+    log_info "Restored original /etc/default/grub (backup preserved)"
+else
+    log_error "Failed to restore /etc/default/grub from backup"
+    exit 1
+fi
+
+# Update GRUB to apply restored settings
+log_info "Updating GRUB configuration..."
+if update-grub >/dev/null 2>&1; then
+    log_info "GRUB configuration updated successfully"
+else
+    log_error "Failed to update GRUB configuration"
+    exit 1
+fi
+
+# Sync EFI partitions to ensure GRUB changes are reflected on both drives
+log_info "Syncing EFI partitions after GRUB restoration..."
+if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
+    if /usr/local/bin/sync-efi-partitions >/dev/null 2>&1; then
+        log_info "EFI partition sync completed successfully"
+    else
+        log_warning "EFI partition sync failed - drives may have inconsistent EFI content"
+    fi
+else
+    log_warning "EFI sync script not found - EFI partitions may be out of sync"
+fi
+
+# Final validation: ensure restored config has Ubuntu entries
+log_info "Validating restored GRUB configuration..."
+restored_entries=$(grep -c "menuentry.*Ubuntu.*LTS\|menuentry.*linux" /boot/grub/grub.cfg 2>/dev/null || echo "0")
+log_info "Restored config contains $restored_entries Ubuntu kernel entries"
+
+if [[ "$restored_entries" -eq 0 ]]; then
+    log_error "CRITICAL: Restored GRUB config has no Ubuntu kernel entries!"
+    log_error "System may not boot properly after reboot"
+    # Don't exit here - continue cleanup but warn user
+    log_warning "Cleanup continuing but manual GRUB repair may be needed"
+else
+    log_info "✓ Restored GRUB configuration validation passed"
 fi
 
 # Disable cleanup service

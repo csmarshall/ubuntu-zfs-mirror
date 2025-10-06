@@ -1,5 +1,36 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.2.4 - PATCH: Added GRUB validation and improved backup handling with .post-initial-install extension (2025-10-06)
+
+**Enhanced First-Boot Cleanup with Validation and EFI Sync**
+
+Added comprehensive GRUB validation to first-boot cleanup process and improved backup file naming to prevent conflicts with system tools.
+
+**Key Improvements:**
+- **Backup File Extension**: Changed from `.orig` to `.post-initial-install` to avoid conflicts with system tools
+- **Pre-Restoration Validation**: Validates backup contains Ubuntu entries before restoring
+- **Post-Restoration Validation**: Confirms restored config has Ubuntu entries after update-grub
+- **EFI Synchronization**: Added EFI partition sync after GRUB restoration for redundancy
+- **Backup Preservation**: Copy instead of move backup files for debugging capability
+
+**Enhanced Safety:**
+- **Prevents Unbootable Systems**: Aborts restoration if backup lacks Ubuntu kernel entries
+- **Graceful Degradation**: Continues with warnings if validation fails after restoration
+- **Clear Error Messages**: Detailed logging explains exactly what went wrong
+- **Debugging Support**: Preserved backup files enable manual inspection
+
+**Technical Implementation:**
+- Pre-restore check: Validates `/boot/grub/grub.cfg.post-initial-install` has Ubuntu entries
+- Post-restore check: Confirms final `/boot/grub/grub.cfg` has Ubuntu entries
+- EFI sync: Runs `/usr/local/bin/sync-efi-partitions` after GRUB restoration
+- Backup preservation: Uses `cp` instead of `mv` to keep `.post-initial-install` files
+
+**Impact:** Eliminates risk of restoring broken GRUB configurations and ensures EFI partition consistency.
+
+**Changes:** +42, -18 lines
+
+---
+
 ## v5.2.3 - PATCH: Fixed GRUB backup to properly generate clean target system configuration (2025-10-06)
 
 **Critical Fix for GRUB Configuration Generation**
