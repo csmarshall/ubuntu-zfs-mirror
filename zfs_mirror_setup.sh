@@ -853,7 +853,7 @@ prompt_swap_size() {
     local ram_gb swap_input result
     ram_gb=$(free --giga | awk '/^Mem:/ {print $2}')
 
-    log_info "=== Swap Partition Configuration ==="
+    echo "=== Swap Partition Configuration ===" >&2
     echo "System RAM: ${ram_gb}GB" >&2
     echo "Recommended for headless servers: 8GB (provides emergency buffer without hibernation overhead)" >&2
     echo "" >&2
@@ -877,7 +877,7 @@ prompt_swap_size() {
 prompt_additional_datasets() {
     local create_additional datasets custom_name custom_mount choice
 
-    log_info "=== Optional ZFS Datasets ==="
+    echo "=== Optional ZFS Datasets ===" >&2
     echo "The following datasets will be created by default:" >&2
     echo "  • rpool/root     → / (includes /boot)" >&2
     echo "  • rpool/var      → /var" >&2
