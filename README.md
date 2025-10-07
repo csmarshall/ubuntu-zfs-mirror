@@ -76,7 +76,17 @@ sudo systemctl status zfs-firstboot-cleanup.service
 
 ## Quick Start
 
-### 1. Find Your Drives
+### 1. Download the Script
+
+```bash
+# Download the script from GitHub
+wget https://raw.githubusercontent.com/csmarshall/ubuntu-zfs-mirror/main/zfs_mirror_setup.sh
+
+# Make it executable
+chmod 755 zfs_mirror_setup.sh
+```
+
+### 2. Find Your Drives
 ```bash
 # List all drives by stable ID (required for ZFS)
 ls -la /dev/disk/by-id/ | grep -v part
@@ -85,12 +95,12 @@ ls -la /dev/disk/by-id/ | grep -v part
 # NEVER use /dev/sdX names - they can change between reboots!
 ```
 
-### 2. Basic Installation
+### 3. Basic Installation
 ```bash
 sudo ./zfs_mirror_setup.sh hostname /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL123456 /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL789012
 ```
 
-### 3. Recommended: Clean Installation
+### 4. Recommended: Clean Installation
 ```bash
 sudo ./zfs_mirror_setup.sh --prepare hostname /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL123456 /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL789012
 ```

@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.0.1 - Cleanup dual-pool references and undefined variables
+# Version: 6.0.2 - Fix GRUB syntax error and add timezone prompting
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.0.1"
+readonly VERSION="6.0.2"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -871,6 +871,28 @@ prompt_swap_size() {
     fi
 
     echo "${result}"
+}
+
+# Interactive timezone configuration using built-in tzselect
+prompt_timezone() {
+    local timezone_choice
+
+    echo "=== Timezone Configuration ===" >&2
+    echo "Please select your timezone to prevent interactive prompts during installation." >&2
+    echo "This uses the standard Debian/Ubuntu timezone selection interface." >&2
+    echo "" >&2
+
+    # Use the built-in tzselect command for official timezone selection
+    echo "Please follow the prompts to select your timezone:" >&2
+    timezone_choice=$(tzselect 2>/dev/null)
+
+    # Validate the selection
+    if [[ -n "${timezone_choice}" ]] && [[ -f "/usr/share/zoneinfo/${timezone_choice}" ]]; then
+        echo "${timezone_choice}"
+    else
+        log_warning "Invalid timezone selection. Using UTC as fallback."
+        echo "UTC"
+    fi
 }
 
 # Interactive additional dataset creation
@@ -1784,6 +1806,10 @@ log_header "Configuration Options"
 SWAP_SIZE=$(prompt_swap_size)
 log_info "Swap size selected: ${SWAP_SIZE}"
 
+# Get timezone from user
+TIMEZONE=$(prompt_timezone)
+log_info "Timezone selected: ${TIMEZONE}"
+
 # Get additional datasets from user
 ADDITIONAL_DATASETS=$(prompt_additional_datasets)
 if [[ -n "${ADDITIONAL_DATASETS}" ]]; then
@@ -2046,11 +2072,29 @@ fi
 # Update packages
 apt-get update
 
-# Configure locale and timezone
-DEBIAN_FRONTEND=noninteractive apt-get install --yes locales tzdata
+# Configure locale and timezone non-interactively
+export DEBIAN_FRONTEND=noninteractive
+export DEBCONF_NONINTERACTIVE_SEEN=true
+
+# Preseed timezone configuration to prevent interactive prompts
+echo "tzdata tzdata/Areas select $(echo "${TIMEZONE}" | cut -d'/' -f1)" | debconf-set-selections
+echo "tzdata tzdata/Zones/$(echo "${TIMEZONE}" | cut -d'/' -f1) select $(echo "${TIMEZONE}" | cut -d'/' -f2-)" | debconf-set-selections
+
+# Preseed locale configuration
+echo "locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8" | debconf-set-selections
+echo "locales locales/default_environment_locale select en_US.UTF-8" | debconf-set-selections
+
+# Install packages non-interactively
+apt-get install --yes locales tzdata
+
+# Generate locale
 locale-gen en_US.UTF-8
 echo 'LANG=en_US.UTF-8' > /etc/default/locale
-dpkg-reconfigure tzdata
+
+# Apply timezone setting non-interactively
+ln -sf "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime
+echo "${TIMEZONE}" > /etc/timezone
+dpkg-reconfigure --frontend noninteractive tzdata
 
 # Install essential packages
 apt-get install --yes \
@@ -2945,18 +2989,43 @@ log_info "Configuring first-boot force import for reliable ZFS pool access..."
 # Add kernel parameter for first boot force import
 log_info "Adding zfs_force=1 kernel parameter for first boot..."
 
-# Create simple GRUB script for first boot
+# Create proper GRUB script for first boot
 cat > /mnt/etc/grub.d/99_zfs_firstboot << 'GRUB_SCRIPT_EOF'
 #!/bin/sh
-# Simple ZFS first-boot force import script
-# Adds zfs_force=1 parameter when cleanup service is enabled
+# ZFS First-Boot Force Import GRUB Script
+# Generates a temporary menu entry with zfs_force=1 when cleanup service is enabled
 
 exec tail -n +3 $0
 
-# Check if cleanup service is enabled (indicates first boot needed)
+# Only generate first-boot entry if cleanup service is enabled
 if systemctl is-enabled zfs-firstboot-cleanup.service >/dev/null 2>&1; then
-    # Add zfs_force=1 to default kernel command line
-    GRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} zfs_force=1"
+    # Source GRUB configuration
+    . "$pkgdatadir/grub-mkconfig_lib"
+
+    # Get the root filesystem info
+    GRUB_DEVICE=$(${grub_probe} --target=device /)
+    GRUB_DEVICE_UUID=$(${grub_probe} --device ${GRUB_DEVICE} --target=fs_uuid 2> /dev/null) || true
+
+    # Get the actual kernel version
+    KERNEL_VERSION=\$(ls /boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/vmlinuz-||' || ls /boot/@/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/@/vmlinuz-||')
+
+    if [ -n "\$KERNEL_VERSION" ]; then
+        # Generate first-boot menu entry
+        cat << EOF
+menuentry 'Ubuntu (ZFS Force Import - First Boot)' --class ubuntu --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-simple-\$GRUB_DEVICE_UUID' {
+	recordfail
+	load_video
+	gfxmode \$linux_gfx_mode
+	insmod gzio
+	if [ x\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+	insmod part_gpt
+	insmod zfs
+	search --no-floppy --fs-uuid --set=root \$GRUB_DEVICE_UUID
+	linux	/@/vmlinuz-\$KERNEL_VERSION root=ZFS=rpool/root ro zfs_force=1
+	initrd	/@/initrd.img-\$KERNEL_VERSION
+}
+EOF
+    fi
 fi
 GRUB_SCRIPT_EOF
 

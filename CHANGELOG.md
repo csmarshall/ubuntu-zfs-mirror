@@ -1,5 +1,34 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.0.2 - Fix GRUB syntax error and add timezone prompting (2025-10-07)
+
+**Critical installation fixes and user experience improvements**
+
+Fixed a critical GRUB syntax error that was preventing installation completion and added interactive timezone configuration to eliminate installation interruptions.
+
+**Critical Fixes:**
+- **GRUB Syntax Error**: Fixed improper GRUB script generation that caused "syntax error at line 327"
+- **Interactive Timezone Prompts**: Added `tzselect`-based timezone configuration before installation starts
+- **Non-Interactive Package Installation**: Fixed timezone/locale configuration to prevent dpkg prompts
+- **Kernel Path Detection**: Fixed kernel version detection in GRUB first-boot script
+- **Console Parameter Inheritance**: GRUB first-boot entry now inherits existing console settings
+
+**Technical Details:**
+- Replaced broken GRUB script logic that mixed shell commands with GRUB configuration
+- Used proper GRUB script structure that generates menuentry blocks without shell logic
+- Added timezone prompting using built-in Debian `tzselect` command
+- Fixed timezone preseeding with proper debconf configuration
+- Enhanced kernel detection to handle both `/boot/vmlinuz-*` and `/boot/@/vmlinuz-*` paths
+- Preserved serial console parameters (`console=ttyS1,115200`) in first-boot entry
+
+**User Experience:**
+- Installation no longer hangs on timezone configuration prompts
+- First boot works reliably with proper force import mechanism
+- Better error messages and debugging capability
+- Faster GRUB generation (can optionally disable os-prober)
+
+**Line Changes**: +45, -12 (net addition for robustness)
+
 ## v6.0.1 - Cleanup dual-pool references and undefined variables (2025-10-07)
 
 **Complete cleanup of legacy dual-pool code and undefined variables**

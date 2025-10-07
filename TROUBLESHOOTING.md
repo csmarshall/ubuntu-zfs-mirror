@@ -207,7 +207,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **6.0.1** (as of 2025-10-07)
+- Current version: **6.0.2** (as of 2025-10-07)
 
 **⚠️ CRITICAL: Version Synchronization Required**
 When updating version numbers, you **MUST** update ALL of these locations:
