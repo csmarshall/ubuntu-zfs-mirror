@@ -1,5 +1,30 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.0.3 - Fix GRUB force import entry with robust kernel detection (2025-10-07)
+
+**Critical fix for first-boot GRUB entry generation**
+
+Resolved GRUB force import entry issues causing boot failures by fixing kernel paths, implementing robust dynamic detection, and adding comprehensive error handling.
+
+**Critical Fixes:**
+- **Correct Kernel Paths**: Fixed GRUB entry to use `/root@/boot/vmlinuz-*` instead of `/vmlinuz-*`
+- **Dynamic EFI UUID Detection**: Auto-detect EFI partition UUID from existing GRUB config (no hardcoded values)
+- **Robust Kernel Detection**: Multiple detection methods for kernel version with proper error handling
+- **Fail-Fast Error Handling**: Installation aborts if kernel/UUID detection fails (no silent fallbacks)
+- **Console Parameter Inheritance**: Properly preserve serial console and other boot parameters
+
+**Technical Details:**
+- Match GRUB entry format exactly to working Ubuntu entries (quotes, paths, search commands)
+- Dynamic detection prevents kernel version hardcoding across different installations
+- EFI UUID detection makes script work on any system regardless of partition UUIDs
+- Comprehensive error messages aid debugging when detection fails
+- Proper shell quoting and escaping in GRUB script generation
+
+**Root Cause Analysis:**
+Previous version generated GRUB entries with incorrect kernel paths causing "file not found" errors and initramfs prompts. This version ensures GRUB entries are identical to working Ubuntu entries except for the added `zfs_force=1` parameter.
+
+**Line Changes**: +30, -15 (improved robustness and error handling)
+
 ## v6.0.2 - Fix GRUB syntax error and add timezone prompting (2025-10-07)
 
 **Critical installation fixes and user experience improvements**

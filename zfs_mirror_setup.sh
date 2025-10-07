@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.0.2 - Fix GRUB syntax error and add timezone prompting
+# Version: 6.0.3 - Fix GRUB force import entry with robust kernel detection
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.0.2"
+readonly VERSION="6.0.3"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2989,43 +2989,76 @@ log_info "Configuring first-boot force import for reliable ZFS pool access..."
 # Add kernel parameter for first boot force import
 log_info "Adding zfs_force=1 kernel parameter for first boot..."
 
-# Create proper GRUB script for first boot
+# Create robust GRUB script for first boot with proper error handling
 cat > /mnt/etc/grub.d/99_zfs_firstboot << 'GRUB_SCRIPT_EOF'
 #!/bin/sh
-# ZFS First-Boot Force Import GRUB Script
-# Generates a temporary menu entry with zfs_force=1 when cleanup service is enabled
+set -e
 
-exec tail -n +3 $0
+# Check if cleanup service file exists (indicates first boot setup)
+if [ -f /etc/systemd/system/zfs-firstboot-cleanup.service ]; then
 
-# Only generate first-boot entry if cleanup service is enabled
-if systemctl is-enabled zfs-firstboot-cleanup.service >/dev/null 2>&1; then
-    # Source GRUB configuration
-    . "$pkgdatadir/grub-mkconfig_lib"
+    # Source GRUB configuration to get existing parameters
+    . /etc/default/grub
 
-    # Get the root filesystem info
-    GRUB_DEVICE=$(${grub_probe} --target=device /)
-    GRUB_DEVICE_UUID=$(${grub_probe} --device ${GRUB_DEVICE} --target=fs_uuid 2> /dev/null) || true
+    # Dynamic kernel version detection - find the actual installed kernel
+    KERNEL_VERSION=""
 
-    # Get the actual kernel version
-    KERNEL_VERSION=\$(ls /boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/vmlinuz-||' || ls /boot/@/vmlinuz-* 2>/dev/null | head -1 | sed 's|/boot/@/vmlinuz-||')
+    # Method 1: Check what's actually in /boot
+    KERNEL_FILE=$(ls /boot/vmlinuz-* 2>/dev/null | head -1 || echo "")
+    if [ -n "$KERNEL_FILE" ]; then
+        KERNEL_VERSION=$(basename "$KERNEL_FILE" | sed 's/vmlinuz-//')
+    fi
 
-    if [ -n "\$KERNEL_VERSION" ]; then
-        # Generate first-boot menu entry
-        cat << EOF
-menuentry 'Ubuntu (ZFS Force Import - First Boot)' --class ubuntu --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-simple-\$GRUB_DEVICE_UUID' {
+    # Method 2: Extract from existing GRUB config if Method 1 failed
+    if [ -z "$KERNEL_VERSION" ]; then
+        KERNEL_VERSION=$(grep "linux.*vmlinuz-" /boot/grub/grub.cfg | head -1 | sed 's/.*vmlinuz-\([^"]*\).*/\1/' 2>/dev/null || echo "")
+    fi
+
+    # FAIL if we couldn't detect kernel version
+    if [ -z "$KERNEL_VERSION" ]; then
+        echo "ERROR: Could not detect kernel version for ZFS first-boot entry" >&2
+        echo "Available kernels in /boot:" >&2
+        ls -la /boot/vmlinuz-* 2>/dev/null || echo "No kernels found in /boot" >&2
+        echo "GRUB config kernel references:" >&2
+        grep "linux.*vmlinuz" /boot/grub/grub.cfg 2>/dev/null || echo "No kernel references in GRUB config" >&2
+        exit 1
+    fi
+
+    # Get the EFI UUID from the existing GRUB config
+    EFI_UUID=$(grep "search --no-floppy --fs-uuid --set=root" /boot/grub/grub.cfg | head -1 | awk '{print $NF}' 2>/dev/null || echo "")
+
+    # FAIL if we couldn't detect EFI UUID
+    if [ -z "$EFI_UUID" ]; then
+        echo "ERROR: Could not detect EFI UUID for ZFS first-boot entry" >&2
+        echo "GRUB search commands found:" >&2
+        grep "search.*uuid" /boot/grub/grub.cfg 2>/dev/null || echo "No search commands in GRUB config" >&2
+        exit 1
+    fi
+
+    # Build complete kernel command line with existing parameters plus zfs_force=1
+    CMDLINE="root=ZFS=\"rpool/root\" ro"
+    if [ -n "$GRUB_CMDLINE_LINUX_DEFAULT" ]; then
+        CMDLINE="$CMDLINE $GRUB_CMDLINE_LINUX_DEFAULT"
+    fi
+    if [ -n "$GRUB_CMDLINE_LINUX" ]; then
+        CMDLINE="$CMDLINE $GRUB_CMDLINE_LINUX"
+    fi
+    CMDLINE="$CMDLINE zfs_force=1"
+
+    cat << EOF
+menuentry 'Ubuntu (ZFS Force Import - First Boot)' --class ubuntu --class gnu-linux --class gnu --class os {
 	recordfail
 	load_video
-	gfxmode \$linux_gfx_mode
+	gfxmode \${linux_gfx_mode}
 	insmod gzio
-	if [ x\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+	if [ "\${grub_platform}" = xen ]; then insmod xzio; insmod lzopio; fi
 	insmod part_gpt
 	insmod zfs
-	search --no-floppy --fs-uuid --set=root \$GRUB_DEVICE_UUID
-	linux	/@/vmlinuz-\$KERNEL_VERSION root=ZFS=rpool/root ro zfs_force=1
-	initrd	/@/initrd.img-\$KERNEL_VERSION
+	search --no-floppy --fs-uuid --set=root $EFI_UUID
+	linux	"/root@/boot/vmlinuz-$KERNEL_VERSION" $CMDLINE
+	initrd	"/root@/boot/initrd.img-$KERNEL_VERSION"
 }
 EOF
-    fi
 fi
 GRUB_SCRIPT_EOF
 
