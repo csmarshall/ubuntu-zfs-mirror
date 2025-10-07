@@ -6,44 +6,61 @@ Enhanced version of the Ubuntu ZFS mirror root installation script with producti
 
 This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with full redundancy and automatic failover capability. Both drives will be bootable with UEFI support.
 
-**Based on the official [OpenZFS Ubuntu 22.04 Root on ZFS guide](https://openzfs.github.io/openzfs-docs/Getting%20Started/Ubuntu/Ubuntu%2022.04%20Root%20on%20ZFS.html)** with production enhancements, automated first-boot handling, and comprehensive drive replacement capabilities.
+**KISS Implementation**: Following the "Keep It Simple and Stupid" principle, this script uses a straightforward single-pool architecture that eliminates complex dual-pool designs and cleanup procedures for maximum reliability and maintainability.
+
+**Based on the official [OpenZFS Ubuntu 22.04 Root on ZFS guide](https://openzfs.github.io/openzfs-docs/Getting%20Started/Ubuntu/Ubuntu%2022.04%20Root%20on%20ZFS.html)** with production enhancements, simplified architecture, and comprehensive validation capabilities.
 
 ## Features
 
-- **Automatic First Boot**: Uses temporary force import for reliable initial boot, then automatically removes force configuration
-- **Self-Configuring**: First boot automatically reboots to apply clean ZFS import configuration
+- **Interactive Configuration**: Choose swap size (8GB default) and optional ZFS datasets during installation
+- **Single Pool Architecture**: Eliminates dual-pool complexity and Ubuntu 24.04 systemd compatibility issues
+- **Clean First Boot**: Proper hostid synchronization ensures pools import without force flags or manual intervention
 - **Full Drive Redundancy**: Both drives are bootable with automatic failover
-- **Production Ready**: Enhanced error handling and recovery mechanisms
-- **No Manual Intervention**: Eliminates "pool was previously in use from another system" errors
-- **UEFI Support**: Modern boot configuration with proper EFI handling
-- **Fixed Boot Pool Configuration**: Resolves ZFS mount conflicts that cause `update-grub` failures in the standard OpenZFS documentation
+- **GRUB2 Compatible**: Uses stable ZFS feature set that works reliably with GRUB bootloader
+- **SSD Optimized**: Automatic disk detection with appropriate atime, autotrim, and ashift settings
+- **Production Ready**: Comprehensive validation and error handling with detailed logging
+- **Ubuntu 24.04 Native**: Designed specifically for Ubuntu 24.04 LTS with full systemd compatibility
 
 ## Requirements
 
 - Ubuntu 24.04 Live USB environment
 - Two drives of similar size (±10% tolerance)
 - Root privileges
-- UEFI boot mode
+- **UEFI boot mode** (Legacy BIOS/MBR not supported)
 - Internet connection for package installation
+
+**⚠️ UEFI Only**: This script is designed exclusively for UEFI systems and will not work with Legacy BIOS/MBR boot modes. The EFI System Partition and GRUB EFI configuration are essential components of the installation.
 
 ## First Boot Behavior
 
-**⚠️ Important: The system will automatically reboot once during first boot**
+With the **v6.0.0 single-pool architecture**, first boot is designed to work seamlessly without complex cleanup procedures.
 
-After installation, the first boot process works as follows:
+### Normal Boot Process
+1. **UEFI Firmware**: Loads GRUB from the EFI System Partition
+2. **GRUB Bootloader**: Loads kernel and initramfs from the ZFS root pool
+3. **Initramfs**: Ubuntu's ZFS initramfs imports the root pool cleanly using synchronized hostid
+4. **Root Mount**: ZFS root filesystem is mounted and boot continues
+5. **System Start**: Normal systemd boot process to login prompt
+6. **Future Boots**: All subsequent boots follow the same clean process
 
-1. **Initial Boot**: System boots with temporary force import configuration
-   - **Root pool (rpool)**: Force imported via GRUB kernel parameter `zfs_force=1` during initramfs
-   - **Boot pool (bpool)**: Force imported via `ZPOOL_IMPORT_OPTS="-f"` in `/etc/default/zfs` during system startup
-2. **Automatic Cleanup**: The `zfs-firstboot-cleanup.service` runs early in boot and:
-   - Removes GRUB first-boot entry (eliminates `zfs_force=1` kernel parameter)
-   - Removes `ZPOOL_IMPORT_OPTS="-f"` from `/etc/default/zfs`
-   - Restores original GRUB configuration
-   - Disables itself so it never runs again
-3. **Automatic Reboot**: System reboots automatically after ~10 seconds to apply clean configuration
-4. **Normal Operation**: Subsequent boots use standard ZFS imports without force flags for both pools
+### If Boot Fails (Rare)
+If the system fails to boot after installation, this indicates a hostid synchronization issue:
 
-**This is normal behavior** - no user intervention is required. The system will be ready for login after the automatic reboot.
+**Symptoms:**
+- System drops to initramfs prompt
+- "pool was previously in use from another system" error
+- ZFS import failures during boot
+
+**Recovery Steps:**
+1. **Boot to Ubuntu Live USB** (same version used for installation)
+2. **Manual import:** `sudo zpool import -f rpool`
+3. **Mount filesystem:** `sudo zfs set mountpoint=/mnt rpool/root && sudo zfs mount rpool/root`
+4. **Check hostid alignment:** Compare `hostid` with `sudo zdb -C rpool | grep hostid`
+5. **Fix synchronization:** `sudo cp /etc/hostid /mnt/etc/hostid` (if hostids don't match)
+6. **Test fix:** `sudo zfs unmount -a && sudo zpool export rpool && sudo zpool import rpool`
+7. **Reboot:** System should now boot normally
+
+**Prevention:** The script validates hostid synchronization during installation with export/reimport testing to prevent these issues.
 
 ## Quick Start
 
@@ -524,6 +541,32 @@ MIT License - See original repository for details.
 
 **📖 Need Help?** Check [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for common issues and solutions.
 **📈 History**: See [CHANGELOG.md](./CHANGELOG.md) for development timeline and major changes.
+
+---
+
+### Design Evolution & Architecture Notes
+
+#### **Current Architecture (v6.0.0+): Single ZFS Pool**
+- **3 Partitions**: EFI (1GB) + Swap (8GB default) + ZFS Root (remaining)
+- **Single Pool**: `rpool` with GRUB2 compatibility features
+- **Clean First Boot**: Proper hostid synchronization eliminates force import
+- **Ubuntu 24.04 Compatible**: Avoids systemd assertion failures
+
+#### **Legacy Architecture (v5.x): Dual ZFS Pool**
+Prior to commit `6068d7e`, this script used a dual-pool design based on the official OpenZFS documentation:
+- **4 Partitions**: EFI + Swap + Boot Pool (`bpool`) + Root Pool (`rpool`)
+- **Force Import Required**: Complex first-boot cleanup with automatic reboot
+- **Ubuntu 24.04 Issue**: Systemd assertion failures prevented `bpool` import
+- **Commit `6068d7e`**: Fixed mount conflicts but didn't solve underlying systemd bug
+
+#### **Fallback Strategy: Single Pool Force Import**
+If clean hostid synchronization fails in testing, the script can fall back to a simplified force import approach:
+- **Single force import**: Only `rpool` needs `zfs_force=1` (no dual-pool complexity)
+- **Simple cleanup**: Remove first-boot GRUB entry, regenerate config, reboot
+- **No systemd bugs**: Eliminates assertion failures by avoiding separate boot pool
+- **50% less complexity**: One pool import vs. coordinating two pools
+
+This fallback would still be significantly more reliable than the original dual-pool approach while maintaining the benefits of ZFS root mirroring.
 
 ---
 
