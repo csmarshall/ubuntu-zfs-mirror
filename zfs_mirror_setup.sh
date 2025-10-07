@@ -1901,7 +1901,7 @@ log_info "ZFS pool created successfully!"
 show_progress 4 10 "Creating ZFS datasets..."
 
 # Create essential datasets (single pool)
-zfs create -o mountpoint=/ rpool/root
+zfs create -o mountpoint=/ -o devices=on -o exec=on rpool/root
 zfs create -o mountpoint=/var rpool/var
 zfs create -o mountpoint=/var/log rpool/var/log
 
