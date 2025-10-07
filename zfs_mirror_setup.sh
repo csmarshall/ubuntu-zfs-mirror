@@ -2987,7 +2987,15 @@ fi
 
 # No first-boot GRUB script needed with clean hostid synchronization
 log_info "Skipping first-boot force import setup - using clean hostid approach"
-#!/bin/sh
+
+show_progress 10 10 "Installation complete!"
+
+# Final summary of the clean hostid approach
+log_info "📋 Summary: Hostid synchronized between system and ZFS pool"
+log_info "🔄 First boot will import pool cleanly without any special configuration"
+
+# Mark installation as completed
+INSTALL_STATE="completed"
 # ZFS First-Boot Force Import Configuration
 # Creates a well-formed Ubuntu entry with zfs_force=1 using installation variables
 # After first successful boot, this script and configuration are automatically removed
@@ -3045,7 +3053,6 @@ else
     echo "Warning: /etc/grub.d/99_zfs_firstboot running but /.zfs-force-import-firstboot not found" >&2
     echo "This script should have been automatically removed after first boot" >&2
 fi
-GRUB_SCRIPT_EOF
 
 chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 
