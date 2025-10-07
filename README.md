@@ -16,6 +16,7 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 - **Production Ready**: Enhanced error handling and recovery mechanisms
 - **No Manual Intervention**: Eliminates "pool was previously in use from another system" errors
 - **UEFI Support**: Modern boot configuration with proper EFI handling
+- **Fixed Boot Pool Configuration**: Resolves ZFS mount conflicts that cause `update-grub` failures in the standard OpenZFS documentation
 
 ## Requirements
 
@@ -396,6 +397,7 @@ This installation script adheres to and exceeds official OpenZFS and Ubuntu ZFS 
 - **Pool Properties**: Implements all current 2024 recommendations (compression=lz4, atime=off, xattr=sa)
 - **Device Naming**: Uses stable `/dev/disk/by-id/*` paths exclusively
 - **Partition Layout**: Follows UEFI+GPT standards with proper EFI System Partition
+- **Boot Mount Fix**: Corrects mount point conflicts in the official OpenZFS documentation that cause `update-grub` failures
 
 **Ubuntu ZFS Integration:**
 - **Service Configuration**: Uses `zfs-import-scan.service` only, avoiding cache file issues
@@ -493,7 +495,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 5.2.4 - Added GRUB validation and improved backup handling with .post-initial-install extension
+- **Script Version**: 5.2.5 - Fixed ZFS boot mount conflicts that broke update-grub
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
@@ -504,6 +506,17 @@ MIT License - See original repository for details.
 - **AppArmor Support**: Configurable security (enabled by default)
 - **Drive Failure Simulation**: Built-in commands for testing resilience
 - **EFI Sync Utility**: Automatic synchronization between EFI partitions
+- **Fixed Boot Pool Mounting**: Resolves mount conflicts present in the official OpenZFS documentation
+
+### Boot Pool Mount Fix (v5.2.5)
+
+**Issue in OpenZFS Documentation**: The official [OpenZFS Ubuntu 22.04 guide](https://openzfs.github.io/openzfs-docs/Getting%20Started/Ubuntu/Ubuntu%2022.04%20Root%20on%20ZFS.html) creates both `bpool` and `bpool/BOOT/ubuntu_UUID` with `/boot` mount points, causing ZFS mount conflicts.
+
+**Our Solution**:
+- **bpool**: Uses `mountpoint=none` (not `/boot`)
+- **bpool/boot**: Uses `mountpoint=/boot` (single mount point)
+
+**Impact**: Eliminates `update-grub` failures ("didn't find any valid initrd or kernel") and ensures long-term system maintainability for kernel updates.
 
 ---
 
