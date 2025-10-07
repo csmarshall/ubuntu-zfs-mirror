@@ -2064,7 +2064,9 @@ apt-get install --yes \
     systemd-timesyncd \
     cron \
     util-linux \
-    memtest86+
+    memtest86+ \
+    zfsutils-linux \
+    zsh
 
 # Create EFI filesystems with identical volume IDs
 apt-get install --yes dosfstools
