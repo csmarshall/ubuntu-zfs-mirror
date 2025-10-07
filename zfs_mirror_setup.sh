@@ -850,36 +850,40 @@ get_partition_name() {
 
 # Interactive swap size configuration with smart default
 prompt_swap_size() {
-    local ram_gb
+    local ram_gb swap_input result
     ram_gb=$(free --giga | awk '/^Mem:/ {print $2}')
 
     log_info "=== Swap Partition Configuration ==="
-    echo "System RAM: ${ram_gb}GB"
-    echo "Recommended for headless servers: 8GB (provides emergency buffer without hibernation overhead)"
-    echo ""
-    echo -n "Swap size in GB [8]: "
+    echo "System RAM: ${ram_gb}GB" >&2
+    echo "Recommended for headless servers: 8GB (provides emergency buffer without hibernation overhead)" >&2
+    echo "" >&2
+    echo -n "Swap size in GB [8]: " >&2
     read -r swap_input
 
     # Use default if empty, validate if provided
     if [[ -z "${swap_input}" ]]; then
-        echo "8G"
+        result="8G"
     elif [[ "${swap_input}" =~ ^[0-9]+$ ]] && [[ "${swap_input}" -gt 0 ]] && [[ "${swap_input}" -le 512 ]]; then
-        echo "${swap_input}G"
+        result="${swap_input}G"
     else
         log_warning "Invalid swap size '${swap_input}'. Using default 8GB."
-        echo "8G"
+        result="8G"
     fi
+
+    echo "${result}"
 }
 
 # Interactive additional dataset creation
 prompt_additional_datasets() {
+    local create_additional datasets custom_name custom_mount choice
+
     log_info "=== Optional ZFS Datasets ==="
-    echo "The following datasets will be created by default:"
-    echo "  • rpool/root     → / (includes /boot)"
-    echo "  • rpool/var      → /var"
-    echo "  • rpool/var/log  → /var/log"
-    echo ""
-    echo -n "Would you like to create additional datasets? [y/N]: "
+    echo "The following datasets will be created by default:" >&2
+    echo "  • rpool/root     → / (includes /boot)" >&2
+    echo "  • rpool/var      → /var" >&2
+    echo "  • rpool/var/log  → /var/log" >&2
+    echo "" >&2
+    echo -n "Would you like to create additional datasets? [y/N]: " >&2
     read -r create_additional
 
     if [[ "${create_additional,,}" != "y" ]]; then
@@ -887,20 +891,20 @@ prompt_additional_datasets() {
         return
     fi
 
-    echo ""
-    echo "Common additional datasets:"
-    echo "1) rpool/home        → /home (separate home directories)"
-    echo "2) rpool/opt         → /opt (third-party software)"
-    echo "3) rpool/srv         → /srv (service data)"
-    echo "4) rpool/tmp         → /tmp (temporary files on ZFS)"
-    echo "5) rpool/usr/local   → /usr/local (local installations)"
-    echo "6) Custom dataset"
-    echo "0) Done"
-    echo ""
+    echo "" >&2
+    echo "Common additional datasets:" >&2
+    echo "1) rpool/home        → /home (separate home directories)" >&2
+    echo "2) rpool/opt         → /opt (third-party software)" >&2
+    echo "3) rpool/srv         → /srv (service data)" >&2
+    echo "4) rpool/tmp         → /tmp (temporary files on ZFS)" >&2
+    echo "5) rpool/usr/local   → /usr/local (local installations)" >&2
+    echo "6) Custom dataset" >&2
+    echo "0) Done" >&2
+    echo "" >&2
 
-    local datasets=""
+    datasets=""
     while true; do
-        echo -n "Select datasets (1-6, 0 when done): "
+        echo -n "Select datasets (1-6, 0 when done): " >&2
         read -r choice
 
         case $choice in
@@ -910,16 +914,16 @@ prompt_additional_datasets() {
             4) datasets="${datasets}rpool/tmp:/tmp " ;;
             5) datasets="${datasets}rpool/usr/local:/usr/local " ;;
             6)
-                echo -n "Enter dataset name (e.g., rpool/data): "
+                echo -n "Enter dataset name (e.g., rpool/data): " >&2
                 read -r custom_name
-                echo -n "Enter mount point (e.g., /data): "
+                echo -n "Enter mount point (e.g., /data): " >&2
                 read -r custom_mount
                 if [[ -n "${custom_name}" && -n "${custom_mount}" ]]; then
                     datasets="${datasets}${custom_name}:${custom_mount} "
                 fi
                 ;;
             0) break ;;
-            *) echo "Invalid choice. Please select 1-6 or 0." ;;
+            *) echo "Invalid choice. Please select 1-6 or 0." >&2 ;;
         esac
     done
 
