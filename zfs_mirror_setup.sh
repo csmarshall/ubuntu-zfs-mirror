@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.0.0-alpha - MAJOR: Single ZFS pool refactor with interactive configuration
+# Version: 6.0.1 - Cleanup dual-pool references and undefined variables
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.0.0-alpha"
+readonly VERSION="6.0.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -1171,7 +1171,7 @@ perform_pre_destruction_analysis() {
     # Check if we're running from a ZFS root that we're trying to destroy
     local current_root
     current_root=$(findmnt -n -o SOURCE / 2>/dev/null || echo "unknown")
-    if [[ "${current_root}" =~ ^rpool ]] || [[ "${current_root}" =~ ^bpool ]]; then
+    if [[ "${current_root}" =~ ^rpool ]]; then
         log_error "CRITICAL: You appear to be running from a ZFS root system!"
         log_error "The installer cannot destroy pools that are currently in use as root."
         log_error "Please boot from a Live USB to run this installer."
@@ -2309,14 +2309,12 @@ zpool status | grep -E "(pool:|state:|scan:|errors:)" || echo "  ERROR: Could no
 echo ""
 
 echo "2. Pool Health Summary:"
-for pool in rpool bpool; do
-    if zpool list "$pool" &>/dev/null; then
-        status=$(zpool list -H -o health "$pool" 2>/dev/null || echo "UNKNOWN")
-        echo "  $pool: $status"
-    else
-        echo "  $pool: NOT FOUND"
-    fi
-done
+if zpool list rpool &>/dev/null; then
+    status=$(zpool list -H -o health rpool 2>/dev/null || echo "UNKNOWN")
+    echo "  rpool: $status"
+else
+    echo "  rpool: NOT FOUND"
+fi
 echo ""
 
 echo "3. ZFS Dataset Usage:"
@@ -2413,9 +2411,9 @@ log_warning() { logger -t "sync-grub-to-mirror-drives" -p user.warning "$1"; ech
 
 log_info "Syncing GRUB to all ZFS mirror drives..."
 
-# Discover drives from both bpool and rpool
+# Discover drives from rpool
 DRIVES=()
-for pool in bpool rpool; do
+for pool in rpool; do
     if zpool status "$pool" &>/dev/null; then
         while IFS= read -r drive; do
             if [[ "$drive" =~ ^(.*)-part[0-9]+$ ]]; then
@@ -2499,7 +2497,7 @@ usage() {
     echo "Example: $0 /dev/disk/by-id/ata-WDC_WD1234567890_NEWSERIAL"
     echo ""
     echo "This script will:"
-    echo "  1. Auto-detect failed drives in bpool and rpool"
+    echo "  1. Auto-detect failed drives in rpool"
     echo "  2. Partition the replacement drive to match the mirror"
     echo "  3. Replace failed drives using stable identifiers (GUIDs when needed)"
     echo "  4. Reinstall GRUB and sync EFI partitions"
@@ -2583,15 +2581,12 @@ validate_resilvering_started() {
     fi
 }
 
-# Detect failed devices in both pools
-echo "Checking bpool for failed devices..."
-BPOOL_FAILED=($(detect_failed_devices "bpool"))
-
+# Detect failed devices in rpool
 echo "Checking rpool for failed devices..."
 RPOOL_FAILED=($(detect_failed_devices "rpool"))
 
-if [[ ${#BPOOL_FAILED[@]} -eq 0 && ${#RPOOL_FAILED[@]} -eq 0 ]]; then
-    echo -e "${GREEN}No failed devices detected in either pool.${NC}"
+if [[ ${#RPOOL_FAILED[@]} -eq 0 ]]; then
+    echo -e "${GREEN}No failed devices detected in rpool.${NC}"
     echo ""
     echo "Current pool status:"
     zpool status
@@ -2611,9 +2606,6 @@ echo -e "${RED}${BOLD}⚠️  SAFETY VERIFICATION ⚠️${NC}"
 echo -e "${YELLOW}The following drives will be replaced with ${BOLD}${REPLACEMENT_DRIVE}${NC}:"
 
 echo -e "${YELLOW}Failed devices summary:${NC}"
-if [[ ${#BPOOL_FAILED[@]} -gt 0 ]]; then
-    echo "  bpool: ${BPOOL_FAILED[*]}"
-fi
 if [[ ${#RPOOL_FAILED[@]} -gt 0 ]]; then
     echo "  rpool: ${RPOOL_FAILED[*]}"
 fi
@@ -2650,32 +2642,14 @@ sgdisk -G "$REPLACEMENT_DRIVE"
 echo -e "${BLUE}Step 2: Replacing failed drives in ZFS pools...${NC}"
 log_info "Step 2: Replacing failed drives in ZFS pools"
 
-# Replace in bpool if needed
-if [[ ${#BPOOL_FAILED[@]} -gt 0 ]]; then
-    log_info "Replacing failed device(s) in bpool: ${BPOOL_FAILED[*]}"
-    for failed_device_info in "${BPOOL_FAILED[@]}"; do
-        failed_device="${failed_device_info%:*}"
-        log_info "Attempting bpool replacement: $failed_device -> ${REPLACEMENT_DRIVE}-part2"
-        echo "Replacing $failed_device in bpool..."
-        if zpool replace bpool "$failed_device" "${REPLACEMENT_DRIVE}-part2"; then
-            log_info "bpool replacement initiated successfully"
-            echo "  ✓ bpool replacement initiated"
-            break
-        else
-            log_warning "bpool replacement failed for $failed_device"
-            echo "  ✗ bpool replacement failed, trying alternative method..."
-        fi
-    done
-fi
-
 # Replace in rpool if needed
 if [[ ${#RPOOL_FAILED[@]} -gt 0 ]]; then
     log_info "Replacing failed device(s) in rpool: ${RPOOL_FAILED[*]}"
     for failed_device_info in "${RPOOL_FAILED[@]}"; do
         failed_device="${failed_device_info%:*}"
-        log_info "Attempting rpool replacement: $failed_device -> ${REPLACEMENT_DRIVE}-part3"
+        log_info "Attempting rpool replacement: $failed_device -> ${REPLACEMENT_DRIVE}-part2"
         echo "Replacing $failed_device in rpool..."
-        if zpool replace rpool "$failed_device" "${REPLACEMENT_DRIVE}-part3"; then
+        if zpool replace rpool "$failed_device" "${REPLACEMENT_DRIVE}-part2"; then
             log_info "rpool replacement initiated successfully"
             echo "  ✓ rpool replacement initiated"
             break
@@ -2740,7 +2714,7 @@ echo ""
 
 # Clear any remaining errors
 log_info "Clearing pool errors"
-zpool clear bpool 2>/dev/null || true
+# Single-pool architecture - only rpool exists
 zpool clear rpool 2>/dev/null || true
 
 log_info "Drive replacement process completed successfully!"
@@ -2777,14 +2751,13 @@ EMERGENCY BOOT PROCEDURES
    Boot from Ubuntu Live USB, then:
 
    sudo zpool import -f -R /mnt rpool
-   sudo zpool import -f -R /mnt bpool
    sudo mount -t zfs rpool/root /mnt
-   sudo mount -t zfs bpool/boot /mnt/boot
+   sudo mount -t zfs rpool/boot /mnt/boot
    sudo mount ${PART1_EFI} /mnt/boot/efi
 
    # Fix the issue, then:
    sudo umount -R /mnt
-   sudo zpool export bpool rpool
+   sudo zpool export rpool
 
 2. GRUB/EFI BOOT REPAIR:
    From live system with pools imported:
@@ -2824,9 +2797,9 @@ Replace failed drive:    sudo /usr/local/bin/replace-drive-in-zfs-boot-mirror /d
 Manual cleanup (if needed): sudo rm -f /.zfs-force-import-firstboot /etc/grub.d/99_zfs_firstboot && sudo update-grub
 Check boot entries:      efibootmgr
 
-Force import (emergency): sudo zpool import -f rpool && sudo zpool import -f bpool
+Force import (emergency): sudo zpool import -f rpool
 
-Scrub pools (monthly):    sudo zpool scrub rpool && sudo zpool scrub bpool
+Scrub pools (monthly):    sudo zpool scrub rpool
 Check scrub progress:     sudo zpool status
 
 ===============================================================================
@@ -3382,7 +3355,7 @@ echo ""
 echo -e "${YELLOW}${BOLD}If you encounter boot issues on first boot:${NC}"
 echo -e "${CYAN}1. From initramfs prompt, run these commands:${NC}"
 echo -e "   ${GREEN}zpool import -f rpool${NC}"
-echo -e "   ${GREEN}zpool import -f bpool${NC}"
+echo -e "   ${GREEN}# Single-pool architecture - only rpool import needed${NC}"
 echo -e "   ${GREEN}exit${NC}"
 echo ""
 echo -e "${CYAN}2. After successful boot, the system will automatically remove${NC}"
@@ -3451,7 +3424,7 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     umount -lR /mnt 2>/dev/null || true
         
     # Export pools cleanly
-    zpool export bpool 2>/dev/null || zpool export -f bpool 2>/dev/null || true
+    # Single-pool architecture - only rpool exists
     zpool export rpool 2>/dev/null || zpool export -f rpool 2>/dev/null || true
 
     echo ""

@@ -1,5 +1,28 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.0.1 - Cleanup dual-pool references and undefined variables (2025-10-07)
+
+**Complete cleanup of legacy dual-pool code and undefined variables**
+
+Fixed remaining references to the old dual-pool architecture that were causing undefined variable errors and potential script failures in testing and utility functions.
+
+**Changes:**
+- **Drive Replacement Logic**: Cleaned up all bpool references in drive replacement functionality
+- **Undefined Variables**: Removed all BPOOL_FAILED variable references that were never defined in single-pool architecture
+- **Partition Numbers**: Updated drive replacement to use correct partition numbers (part2 instead of part3 for rpool in single-pool layout)
+- **Documentation**: Updated troubleshooting and recovery instructions to reflect single-pool architecture
+- **Testing Functions**: Removed dual-pool references from pool validation and test scripts
+- **Script Validation**: Confirmed script passes syntax validation with `bash -n`
+
+**Technical Details:**
+- Removed entire bpool replacement code block from drive replacement function
+- Updated pool discovery to only scan rpool instead of both bpool and rpool
+- Fixed partition layout references throughout troubleshooting documentation
+- Cleaned up export/import instructions in recovery procedures
+- Updated pool health check commands to single-pool architecture
+
+**Line Changes**: +0, -47 (net reduction through cleanup)
+
 ## v6.0.0 - MAJOR: Single-Pool Architecture Refactor for Ubuntu 24.04 Compatibility (2025-10-07)
 
 **Complete architectural refactor from dual-pool to single-pool design to resolve Ubuntu 24.04 systemd compatibility issues**

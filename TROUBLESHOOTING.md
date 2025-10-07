@@ -14,29 +14,27 @@
 **Root Cause:**
 ZFS pools created in live CD environment may not import cleanly on first boot due to different system context.
 
-**Solution (v5.1.0 - Smart Force Import):**
-- **Automatic force import:** Uses `/etc/default/zfs` configuration for seamless first boot
-- **ZFS native integration:** Leverages OpenZFS systemd service configuration
-- **Smart cleanup:** Automatic removal of force configuration after successful first boot
-- **Parameter inheritance:** Preserves existing kernel parameters (console, etc.)
-- **No synchronization needed:** Eliminates complex hostid manipulation entirely
+**Solution (v6.0.0+ - Simplified Force Import):**
+- **Kernel Parameter Force Import:** Uses `zfs_force=1` in GRUB kernel command line for reliable first boot
+- **Service-Controlled Cleanup:** Systemd service automatically removes force import after successful boot
+- **Single Pool Architecture:** Only `rpool` exists - no complex dual-pool management
+- **Comprehensive Validation:** Pool health, mount validation, and write access checks before cleanup
+- **Transparent Logging:** All activities logged to system log for debugging
 
 **Technical Implementation:**
-- **ZFS Configuration:** `ZPOOL_IMPORT_OPTS="-f"` in `/etc/default/zfs` for force import
-- **Initramfs Integration:** Works with `zfs-import-scan.service` for automatic pool detection
-- **GRUB Inheritance:** Smart detection and preservation of existing kernel parameters
-- **Auto-cleanup:** Systemd service removes force configuration after successful boot
-- **Robust Error Handling:** Comprehensive GRUB editing with fallback mechanisms
+- **GRUB Configuration:** Temporary GRUB script adds `zfs_force=1` to kernel command line when service is enabled
+- **Service Detection:** Force import only active when `zfs-firstboot-cleanup.service` is enabled
+- **Automatic Cleanup:** Service validates successful boot and removes itself after one successful import
+- **Smart Integration:** Preserves existing kernel parameters (console, etc.) while adding force import
 
-### Manual Recovery Instructions (v5.1.0)
+### Manual Recovery Instructions (v6.0.0+)
 
 **If First Boot Fails (Rare):**
 If the automatic force import somehow fails, you can manually import:
 
 ```bash
-# From initramfs prompt:
+# From initramfs prompt (single pool architecture):
 zpool import -f rpool
-zpool import -f bpool
 exit
 ```
 
@@ -44,107 +42,145 @@ exit
 If you need to manually remove the first-boot configuration:
 
 ```bash
-# Remove force import configuration
-sudo rm -f /etc/default/zfs.bak
-sudo sed -i '/ZFS_INITRD_ADDITIONAL_DATASETS=/d' /etc/default/zfs
-sudo sed -i '/ZPOOL_IMPORT_OPTS=/d' /etc/default/zfs
+# Check service status
+sudo systemctl status zfs-firstboot-cleanup.service
+
+# Disable service manually if needed
 sudo systemctl disable zfs-firstboot-cleanup.service
+sudo rm -f /etc/systemd/system/zfs-firstboot-cleanup.service
+
+# Update GRUB to remove force import
+sudo update-grub
+
+# Verify rpool status
+zpool status rpool
 ```
 
-**Technical Details:**
-- **ZFS Configuration:** Uses `/etc/default/zfs` for OpenZFS systemd service configuration
-- **Import Service:** `zfs-import-scan.service` handles automatic pool detection and import
-- **Force Import:** `ZPOOL_IMPORT_OPTS="-f"` parameter passed to zpool import commands
-- **Smart GRUB:** Preserves existing kernel parameters while adding necessary ZFS options
+**View First-Boot Logs:**
+```bash
+# Check first-boot cleanup logs
+sudo journalctl -u zfs-firstboot-cleanup.service
 
-### Legacy Issues (Pre-v5.1.0)
+# Check system log for ZFS force import activities
+sudo journalctl | grep "zfs-firstboot-cleanup"
+```
 
-**Note:** The following issues were related to complex hostid synchronization approaches used in versions prior to v5.1.0. These issues no longer apply as the hostid approach has been completely removed in favor of a simpler force import mechanism.
+### Architecture Changes (v6.0.0+)
+
+**Single-Pool Architecture:**
+- **Only `rpool` exists** - eliminated `bpool` due to Ubuntu 24.04 systemd incompatibility
+- **3-Partition Layout:** EFI (1GB) + Swap (configurable) + ZFS Root (remaining space)
+- **GRUB2 Compatibility:** Root pool uses `compatibility=grub2` for direct kernel storage
+- **No Complex Hostid Management:** Relies on reliable force import mechanism
+
+**Benefits of Single-Pool Design:**
+- ✅ **Ubuntu 24.04 Compatible:** Eliminates systemd assertion failures
+- ✅ **Simplified Maintenance:** No dual-pool complexity
+- ✅ **Reliable First Boot:** Proven force import mechanism
+- ✅ **KISS Architecture:** Keep It Simple and Stupid principle
+
+### Legacy Issues (v5.x and Earlier)
+
+**Note:** The following issues were related to dual-pool architecture and complex hostid synchronization used in versions prior to v6.0.0. These issues no longer apply.
 
 **Historical Context:**
-- **v4.2.x - v4.3.x:** Used complex hostid synchronization with multiple validation points
-- **v5.0.x:** Used kernel parameter `zfs_force=1` approach
-- **v5.1.0+:** Uses `/etc/default/zfs` configuration for seamless integration
+- **v4.x:** Complex hostid synchronization with dual-pool architecture
+- **v5.x:** `/etc/default/zfs` configuration approach with dual pools
+- **v6.0.0+:** Simplified `zfs_force=1` kernel parameter with single pool
 
 **Migration from Legacy Versions:**
-If upgrading from older script versions, the new approach eliminates all previous hostid-related issues including:
-- Hostid generation timing issues
-- Chroot environment hexdump/od command inconsistencies
-- Byte order and validation failures
-- Complex synchronization logic
-
-**Current Approach Benefits:**
-- ✅ No hostid manipulation required
-- ✅ Uses standard OpenZFS configuration files
-- ✅ Seamless integration with systemd services
-- ✅ Automatic cleanup after first successful boot
-- ✅ Preserves existing kernel parameters
+The v6.0.0+ single-pool architecture eliminates all previous issues including:
+- Dual-pool import failures and systemd assertion errors
+- Complex hostid synchronization timing issues
+- Boot pool import failures in Ubuntu 24.04
+- Complex force import cleanup procedures
 
 ### Quick Fixes
 
 **Emergency Force Import:**
 ```bash
-# From initramfs prompt
+# From initramfs prompt (single pool only)
 zpool import -f rpool
 exit
 ```
 
 **Manual Pool Import (if needed):**
 ```bash
-# Import pools manually (emergency only)
+# Import pool manually (emergency only)
 sudo zpool import -f rpool
-sudo zpool import -f bpool
 
 # Check pool status
-zpool status
+zpool status rpool
 
-# Check hostid alignment
-hostid
-zdb -C rpool | grep hostid
-zdb -C bpool | grep hostid
+# Check basic functionality
+sudo zfs list
+sudo df -h /
+```
+
+**System Recovery Commands:**
+```bash
+# Check ZFS service status
+sudo systemctl status zfs-import-cache.service
+sudo systemctl status zfs-import-scan.service
+sudo systemctl status zfs-mount.service
+
+# Force ZFS service restart
+sudo systemctl restart zfs-import-scan.service
+sudo systemctl restart zfs-mount.service
 ```
 
 ## Script Configuration Details
 
-### Pool Import Configuration
-- Both `rpool` and `bpool` use `cachefile=none`
-- `zfs-import-scan.service` handles all imports
-- No cache file dependencies
-- **Hostid synchronization** ensures clean import without force flags
+### Single Pool Configuration (v6.0.0+)
+- **Only `rpool`** exists with `cachefile=none`
+- **GRUB2 Compatible:** Uses `compatibility=grub2` feature set
+- **Service-Controlled Force Import:** `zfs-firstboot-cleanup.service` manages first boot
+- **Automatic Cleanup:** Self-removing service after successful boot validation
 
-### Hostid Management (v4.2.0+)
-- Unique hostid generated during installation
-- Synchronized across installer and target system
-- Pre-boot verification confirms pool alignment
-- No cleanup services or force flags required
+### First-Boot Force Import Process
+1. **Service Enabled:** `zfs-firstboot-cleanup.service` is enabled during installation
+2. **GRUB Detection:** GRUB configuration detects enabled service and adds `zfs_force=1`
+3. **Force Import:** Kernel boots with force import parameter
+4. **Validation:** Service validates pool health, mounts, and write access
+5. **Cleanup:** Service disables itself and updates GRUB configuration
+6. **Reboot:** System reboots cleanly without force import
+
+### Partition Layout (v6.0.0+)
+```
+Disk 1 & 2 (mirrored):
+- Partition 1: EFI System (1GB) - FAT32
+- Partition 2: Linux Swap (user-configurable, default 8GB)
+- Partition 3: ZFS Root (remaining space) - rpool mirror
+```
 
 ## Development Notes
 
 ### Recent Changes
-- **2025-09-30:** v4.3.1 - **ENHANCED**: Implemented rpool-authoritative hostid synchronization with auto-recovery
-- **2025-09-30:** v4.3.0 - **MAJOR**: Implemented pool-to-target hostid synchronization (eliminates timing issues)
-- **2025-09-30:** v4.2.11 - Fixed inconsistent hostid reading commands (replaced hexdump with od)
-- **2025-09-30:** v4.2.10 - Fixed malformed od command causing hostid concatenation errors
-- **2025-09-30:** v4.2.9 - Fixed chroot hostid command generating random hostids instead of using synchronized file
-- **2025-09-30:** v4.2.8 - Fixed missing hexdump in chroot causing hostid synchronization failures
-- **2025-09-30:** v4.2.7 - Fixed hostid generation timing bug causing pool validation failures
-- **2025-09-29:** v4.2.6 - Fixed chroot hostid reading to use synchronized file
-- **2025-09-29:** v4.2.5 - Fixed hostid hex formatting with leading zeros
-- **2025-09-29:** v4.2.4 - Fixed zdb hostid validation for active pools
-- **2025-09-29:** v4.2.3 - Dual hostid validation with DRY refactoring
-- **2025-09-29:** v4.2.2 - Fixed hostid mountpoint conflict during pool creation
-- **2025-09-29:** v4.2.1 - Fixed hostid validation timing (validation moved to after base system install)
-- **2025-09-29:** v4.2.0 - Implemented hostid synchronization for clean imports
-- **2025-09-26:** Fixed first boot import reliability by switching to cachefile=none for both pools
+- **2025-10-07:** v6.0.1 - Cleanup dual-pool references and undefined variables
+- **2025-10-07:** v6.0.0 - **MAJOR**: Single-pool architecture refactor for Ubuntu 24.04 compatibility
+- **Historical:** v5.x and earlier used dual-pool architecture (now deprecated)
 
-### Testing Checklist
-- [ ] Hostid generated before pool creation
-- [ ] Hostid file copied to target system (early validation)
-- [ ] Pools created with correct hostid
-- [ ] Base system installed successfully
-- [ ] Final validation: target system hostid matches pool hostid (verified by zdb -C)
-- [ ] Both pools import cleanly at first boot
-- [ ] No force import required
+### Testing Checklist (v6.0.0+)
+- [ ] Single rpool created successfully with GRUB2 compatibility
+- [ ] First-boot service enabled during installation
+- [ ] System boots automatically with force import
+- [ ] Service validates pool health and mounts
+- [ ] Service disables itself after successful validation
+- [ ] Subsequent boots work without force import
+- [ ] System remains stable and functional
+
+### Current Architecture Validation
+```bash
+# Verify single-pool architecture
+zpool list  # Should show only rpool
+zfs list    # Should show rpool datasets
+
+# Check service status (should be disabled after first boot)
+systemctl status zfs-firstboot-cleanup.service
+
+# Verify GRUB configuration (should not have zfs_force=1 after cleanup)
+grep -i zfs_force /boot/grub/grub.cfg
+```
 
 ### Documentation Requirements
 
@@ -171,7 +207,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **5.2.5** (as of 2025-10-06)
+- Current version: **6.0.1** (as of 2025-10-07)
 
 **⚠️ CRITICAL: Version Synchronization Required**
 When updating version numbers, you **MUST** update ALL of these locations:
@@ -182,7 +218,7 @@ When updating version numbers, you **MUST** update ALL of these locations:
 
 Use this command to verify synchronization:
 ```bash
-grep -r "5\.[0-9]\+\.[0-9]\+" *.{sh,md} | grep -E "(Version|version|Script Version)"
+grep -r "6\.[0-9]\+\.[0-9]\+" *.{sh,md} | grep -E "(Version|version|Script Version)"
 ```
 
 ### AI Assistant Guidelines
@@ -204,3 +240,4 @@ grep -r "5\.[0-9]\+\.[0-9]\+" *.{sh,md} | grep -E "(Version|version|Script Versi
 - Monitor Ubuntu ZFS service changes
 - Consider pool scrub automation
 - Add more detailed health checks
+- Enhanced logging and monitoring capabilities
