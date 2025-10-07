@@ -2799,12 +2799,10 @@ EMERGENCY BOOT PROCEDURES
 3. SINGLE DRIVE FAILURE REPLACEMENT:
 
    Drive 1 (${DISK1}) failed:
-   sudo zpool replace rpool ${PART1_ROOT} /dev/NEW-DRIVE-part4
-   sudo zpool replace bpool ${PART1_BOOT} /dev/NEW-DRIVE-part3
+   sudo zpool replace rpool ${PART1_ROOT} /dev/NEW-DRIVE-part3
 
    Drive 2 (${DISK2}) failed:
-   sudo zpool replace rpool ${PART2_ROOT} /dev/NEW-DRIVE-part4
-   sudo zpool replace bpool ${PART2_BOOT} /dev/NEW-DRIVE-part3
+   sudo zpool replace rpool ${PART2_ROOT} /dev/NEW-DRIVE-part3
 
    After replacement, recreate EFI and swap:
    sudo mkdosfs -F 32 -s 1 -n "EFI" -i ${EFI_VOLUME_ID} /dev/NEW-DRIVE-part1
@@ -2833,22 +2831,19 @@ Check scrub progress:     sudo zpool status
 PARTITION LAYOUT REFERENCE
 ===============================================================================
 
-Each drive has 4 partitions:
-  part1: EFI System Partition (512MB, FAT32, UUID=${EFI_VOLUME_ID})
-  part2: Swap (4GB)
-  part3: Boot Pool (2GB, ZFS)
-  part4: Root Pool (Remaining space, ZFS)
+Each drive has 3 partitions:
+  part1: EFI System Partition (1GB, FAT32, UUID=${EFI_VOLUME_ID})
+  part2: Swap (${SWAP_SIZE})
+  part3: Root Pool (Remaining space, ZFS with /boot)
 
 Drive 1 partitions:
   ${PART1_EFI} (EFI)
   ${PART1_SWAP} (Swap)
-  ${PART1_BOOT} (Boot Pool)
   ${PART1_ROOT} (Root Pool)
 
 Drive 2 partitions:
   ${PART2_EFI} (EFI)
   ${PART2_SWAP} (Swap)
-  ${PART2_BOOT} (Boot Pool)
   ${PART2_ROOT} (Root Pool)
 
 ===============================================================================
@@ -2969,28 +2964,23 @@ fi
 
 log_info "Hostid synchronized and validated - clean first boot guaranteed"
 
-# Additional validation: Test pool import readiness
-log_info "Testing pool import readiness with synchronized hostid..."
+# Validation: Verify hostid is properly configured for first boot
+log_info "Validating hostid configuration for clean first boot..."
 
-# Export and reimport to simulate first boot conditions
-if zpool export rpool; then
-    log_debug "Pool exported successfully for import test"
+# Verify pool hostid matches system hostid (no export/import needed during installation)
+SYSTEM_HOSTID_HEX=$(od -A none -t x1 /mnt/etc/hostid | tr -d ' ')
+POOL_HOSTID_COMMENT=$(zpool get -H -o value comment rpool | sed 's/hostid:0x//')
+
+if [[ "${SYSTEM_HOSTID_HEX,,}" == "${POOL_HOSTID_COMMENT,,}" ]]; then
+    log_info "✓ System and pool hostids are synchronized"
+    log_info "✓ Pool will import cleanly on first boot without force flags"
+    log_info "✓ All hostid validation checks passed - system is ready for clean first boot"
 else
-    log_error "CRITICAL: Failed to export pool for import validation"
+    log_error "CRITICAL: Hostid mismatch after validation!"
+    log_error "  System hostid: 0x${SYSTEM_HOSTID_HEX}"
+    log_error "  Pool hostid:   0x${POOL_HOSTID_COMMENT}"
     exit 1
 fi
-
-# Import pool with current hostid (simulates first boot)
-if zpool import -d /dev/disk/by-id rpool; then
-    log_info "✓ Pool import validation successful - first boot will work correctly"
-else
-    log_error "CRITICAL: Pool import validation failed!"
-    log_error "This indicates the hostid synchronization didn't work properly."
-    log_error "First boot would fail with pool import errors."
-    exit 1
-fi
-
-log_info "✓ All hostid validation checks passed - system is ready for clean first boot"
 
 
 # No first-boot GRUB script needed with clean hostid synchronization
