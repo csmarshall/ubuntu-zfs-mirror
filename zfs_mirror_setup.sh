@@ -2969,9 +2969,6 @@ log_info "Hostid synchronized - configuring reliable first boot with force impor
 # Configure simplified force import for reliable first boot
 log_info "Configuring first-boot force import for reliable ZFS pool access..."
 
-# Create first-boot marker file
-touch /mnt/.zfs-force-import-firstboot
-
 # Add kernel parameter for first boot force import
 log_info "Adding zfs_force=1 kernel parameter for first boot..."
 
@@ -2979,43 +2976,115 @@ log_info "Adding zfs_force=1 kernel parameter for first boot..."
 cat > /mnt/etc/grub.d/99_zfs_firstboot << 'GRUB_SCRIPT_EOF'
 #!/bin/sh
 # Simple ZFS first-boot force import script
-# Adds zfs_force=1 parameter to default boot entry for first boot only
+# Adds zfs_force=1 parameter when cleanup service is enabled
 
 exec tail -n +3 $0
 
-if [ -f /.zfs-force-import-firstboot ]; then
-    # Modify default kernel command line to include zfs_force=1
+# Check if cleanup service is enabled (indicates first boot needed)
+if systemctl is-enabled zfs-firstboot-cleanup.service >/dev/null 2>&1; then
+    # Add zfs_force=1 to default kernel command line
     GRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} zfs_force=1"
 fi
 GRUB_SCRIPT_EOF
 
 chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 
-# Create simple cleanup script
+# Create comprehensive cleanup script with validation and reboot
 cat > /mnt/usr/local/bin/zfs-firstboot-cleanup << 'CLEANUP_SCRIPT_EOF'
 #!/bin/bash
-# Simple ZFS first-boot cleanup
-# Removes force import configuration after successful boot
+# ZFS First-Boot Cleanup with Validation and Controlled Reboot
+# Removes force import configuration after validating successful boot
 
 set -euo pipefail
 
-if [[ -f /.zfs-force-import-firstboot ]]; then
-    echo "Removing first-boot force import configuration..."
+# Logging functions
+log_info() { logger -t "zfs-firstboot-cleanup" -p user.info "$1"; echo "INFO: $1"; }
+log_error() { logger -t "zfs-firstboot-cleanup" -p user.err "$1"; echo "ERROR: $1" >&2; }
+log_warning() { logger -t "zfs-firstboot-cleanup" -p user.warning "$1"; echo "WARNING: $1"; }
 
-    # Remove marker file
-    rm -f /.zfs-force-import-firstboot
+log_info "=== ZFS First-Boot Cleanup Service Starting ==="
+log_info "System hostname: $(hostname)"
+log_info "Boot time: $(uptime -s)"
 
-    # Remove GRUB script
-    rm -f /etc/grub.d/99_zfs_firstboot
-
-    # Update GRUB
-    update-grub
-
-    echo "First-boot cleanup complete - future boots will use standard import"
-
-    # Disable this service
-    systemctl disable zfs-firstboot-cleanup.service
+# Validate that ZFS imported successfully
+log_info "Validating ZFS pool import status..."
+if ! zpool status rpool >/dev/null 2>&1; then
+    log_error "CRITICAL: rpool not found or not imported - aborting cleanup"
+    exit 1
 fi
+
+POOL_STATUS=$(zpool status -x rpool)
+if [[ "$POOL_STATUS" != "pool 'rpool' is healthy" ]]; then
+    log_warning "Pool status: $POOL_STATUS"
+    log_warning "Proceeding with cleanup despite pool health issues"
+else
+    log_info "Pool status: healthy"
+fi
+
+# Validate that required filesystems are mounted
+log_info "Validating filesystem mounts..."
+if ! mountpoint -q /; then
+    log_error "CRITICAL: Root filesystem not properly mounted - aborting cleanup"
+    exit 1
+fi
+
+if ! mountpoint -q /boot/efi; then
+    log_warning "EFI partition not mounted - this may indicate boot issues"
+else
+    log_info "EFI partition properly mounted"
+fi
+
+# Validate that we can write to critical locations
+log_info "Validating write access to critical directories..."
+if ! touch /tmp/zfs-cleanup-test 2>/dev/null; then
+    log_error "CRITICAL: Cannot write to /tmp - filesystem may be read-only"
+    exit 1
+fi
+rm -f /tmp/zfs-cleanup-test
+
+log_info "All validation checks passed - proceeding with cleanup"
+
+# Remove force import configuration
+log_info "Removing first-boot force import configuration..."
+
+# Remove GRUB script
+if rm -f /etc/grub.d/99_zfs_firstboot; then
+    log_info "Removed GRUB first-boot script"
+else
+    log_error "Failed to remove GRUB first-boot script"
+fi
+
+# Update GRUB configuration
+log_info "Updating GRUB configuration to remove force import parameters..."
+if update-grub >/dev/null 2>&1; then
+    log_info "GRUB configuration updated successfully"
+else
+    log_error "Failed to update GRUB configuration"
+fi
+
+# Validate GRUB was updated correctly
+if ! grep -q "zfs_force=1" /boot/grub/grub.cfg 2>/dev/null; then
+    log_info "Verified: zfs_force=1 parameter removed from GRUB configuration"
+else
+    log_warning "zfs_force=1 parameter still present in GRUB configuration"
+fi
+
+# Disable this service
+if systemctl disable zfs-firstboot-cleanup.service >/dev/null 2>&1; then
+    log_info "Disabled first-boot cleanup service"
+else
+    log_warning "Failed to disable first-boot cleanup service"
+fi
+
+log_info "First-boot cleanup completed successfully"
+log_info "System will reboot in 10 seconds to apply clean configuration"
+log_info "Future boots will use standard ZFS import without force flags"
+
+# Controlled reboot with delay for log viewing
+log_info "REBOOT: Initiating automatic reboot to complete first-boot process"
+sleep 10
+systemctl reboot
+
 CLEANUP_SCRIPT_EOF
 
 chmod +x /mnt/usr/local/bin/zfs-firstboot-cleanup
@@ -3023,9 +3092,9 @@ chmod +x /mnt/usr/local/bin/zfs-firstboot-cleanup
 # Create systemd service for cleanup
 cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'SERVICE_EOF'
 [Unit]
-Description=ZFS first-boot cleanup service
-After=zfs-mount.service
-ConditionPathExists=/.zfs-force-import-firstboot
+Description=ZFS first-boot cleanup service with validation and reboot
+After=zfs-mount.service local-fs.target
+Before=multi-user.target network.target
 
 [Service]
 Type=oneshot

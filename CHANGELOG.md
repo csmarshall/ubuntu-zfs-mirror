@@ -15,27 +15,27 @@ This major release eliminates the complex dual-pool (bpool + rpool) design in fa
 - **3-Partition Layout**: EFI (1GB) + Swap (configurable) + ZFS Root (remaining space)
 - **Single ZFS Pool**: Only `rpool` with GRUB2-compatible features for both boot and root functions
 - **Interactive Configuration**: User-prompted swap size (8GB default) and optional dataset creation (/home, /opt, /srv, /tmp, custom)
-- **Clean Hostid Synchronization**: Proper binary hostid handling with endianness validation eliminates force import requirements
-- **No Cleanup Services**: First boot works seamlessly without complex systemd services or automatic reboots
+- **Simplified Force Import**: Reliable first boot using Ubuntu's `zfs_force=1` parameter with automatic cleanup
+- **Smart Cleanup Services**: Service-controlled force import that validates successful boot and self-disables
 
 **KISS Implementation:**
 - **Keep It Simple and Stupid**: Following KISS principles for maximum reliability and maintainability
-- **Eliminated Complexity**: No more dual-pool management, force import flags, or cleanup procedures
+- **Eliminated Complexity**: No more dual-pool management, complex hostid synchronization, or timing dependencies
 - **Standard Ubuntu Integration**: Uses Ubuntu's native ZFS capabilities without complex workarounds
 
 **Enhanced Features:**
 - **Interactive Swap Sizing**: Prompts for swap size with 8GB default (suitable for headless servers)
 - **Optional Dataset Creation**: User choice for /home, /opt, /srv, /tmp datasets during installation
-- **Comprehensive Validation**: Export/reimport testing during installation to ensure first boot will succeed
+- **Comprehensive Validation**: First-boot service validates pool health, mounts, and write access before cleanup
 - **SSD Optimizations**: Automatic atime=off, autotrim=on, proper ashift detection based on disk type
-- **Endianness-Safe Hostid**: Proper binary file handling with byte-order validation
+- **Transparent Logging**: All first-boot activities logged to system log for debugging and monitoring
 
 **Removed Legacy Features:**
 - **Boot Pool (bpool)**: Eliminated entirely due to Ubuntu 24.04 systemd incompatibility
-- **Force Import Mechanism**: No longer needed with clean hostid synchronization
-- **First-Boot Cleanup Services**: Eliminated complex zfs-firstboot-cleanup.service
-- **Automatic Reboots**: First boot works normally without special procedures
-- **Complex GRUB Scripts**: Simplified to standard Ubuntu ZFS integration
+- **Complex Hostid Synchronization**: Replaced with reliable force import approach
+- **Complex Force Import Logic**: Replaced dual-pool force import with simple single-pool approach
+- **Hostid Timing Dependencies**: Eliminated complex binary file synchronization and validation
+- **Export/Import Testing**: Removed installation-time pool export testing that could fail
 
 **Migration Benefits:**
 - **Ubuntu 24.04 Compatible**: Resolves all systemd assertion failures

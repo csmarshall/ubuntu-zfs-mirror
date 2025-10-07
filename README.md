@@ -14,7 +14,7 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 
 - **Interactive Configuration**: Choose swap size (8GB default) and optional ZFS datasets during installation
 - **Single Pool Architecture**: Eliminates dual-pool complexity and Ubuntu 24.04 systemd compatibility issues
-- **Clean First Boot**: Proper hostid synchronization ensures pools import without force flags or manual intervention
+- **Reliable First Boot**: Automatic force import with validation and cleanup ensures successful first boot without manual intervention
 - **Full Drive Redundancy**: Both drives are bootable with automatic failover
 - **GRUB2 Compatible**: Uses stable ZFS feature set that works reliably with GRUB bootloader
 - **SSD Optimized**: Automatic disk detection with appropriate atime, autotrim, and ashift settings
@@ -33,34 +33,46 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 
 ## First Boot Behavior
 
-With the **v6.0.0 single-pool architecture**, first boot is designed to work seamlessly without complex cleanup procedures.
+With the **v6.0.0 single-pool architecture**, first boot uses a simplified force import mechanism for maximum reliability.
 
-### Normal Boot Process
+### Automatic First Boot Process
 1. **UEFI Firmware**: Loads GRUB from the EFI System Partition
-2. **GRUB Bootloader**: Loads kernel and initramfs from the ZFS root pool
-3. **Initramfs**: Ubuntu's ZFS initramfs imports the root pool cleanly using synchronized hostid
-4. **Root Mount**: ZFS root filesystem is mounted and boot continues
-5. **System Start**: Normal systemd boot process to login prompt
-6. **Future Boots**: All subsequent boots follow the same clean process
+2. **GRUB Bootloader**: Detects first boot and adds `zfs_force=1` kernel parameter automatically
+3. **Initramfs**: Ubuntu's ZFS initramfs force-imports the root pool using `zfs_force=1`
+4. **Root Mount**: ZFS root filesystem is mounted and boot continues normally
+5. **Cleanup Service**: After successful boot, validates system health and removes force import configuration
+6. **Automatic Reboot**: System reboots after 10 seconds to apply clean configuration
+7. **Future Boots**: All subsequent boots use standard ZFS imports without force flags
 
-### If Boot Fails (Rare)
-If the system fails to boot after installation, this indicates a hostid synchronization issue:
+### First Boot Details
+- **Force Import**: Uses Ubuntu's built-in `zfs_force=1` kernel parameter for reliable pool import
+- **Validation**: Cleanup service validates pool health, filesystem mounts, and write access before cleanup
+- **Logging**: All cleanup activities logged to system log (`/var/log/syslog`) for debugging
+- **Automatic**: No manual intervention required - system handles everything automatically
+- **Self-Cleaning**: Force import configuration is automatically removed after successful boot
 
-**Symptoms:**
-- System drops to initramfs prompt
-- "pool was previously in use from another system" error
-- ZFS import failures during boot
+### If Issues Occur
+The first boot process includes comprehensive validation and logging. Check system logs:
 
-**Recovery Steps:**
-1. **Boot to Ubuntu Live USB** (same version used for installation)
-2. **Manual import:** `sudo zpool import -f rpool`
-3. **Mount filesystem:** `sudo zfs set mountpoint=/mnt rpool/root && sudo zfs mount rpool/root`
-4. **Check hostid alignment:** Compare `hostid` with `sudo zdb -C rpool | grep hostid`
-5. **Fix synchronization:** `sudo cp /etc/hostid /mnt/etc/hostid` (if hostids don't match)
-6. **Test fix:** `sudo zfs unmount -a && sudo zpool export rpool && sudo zpool import rpool`
-7. **Reboot:** System should now boot normally
+```bash
+# View cleanup service logs
+sudo journalctl -u zfs-firstboot-cleanup.service
 
-**Prevention:** The script validates hostid synchronization during installation with export/reimport testing to prevent these issues.
+# View system log during first boot
+sudo grep "zfs-firstboot-cleanup" /var/log/syslog
+```
+
+**Manual Recovery (if needed):**
+```bash
+# From initramfs prompt if force import fails
+zpool import -f rpool
+exit
+
+# After login, check service status
+sudo systemctl status zfs-firstboot-cleanup.service
+```
+
+**Design Philosophy:** This approach prioritizes reliability over elegance - force import always works, and automatic cleanup ensures future boots are clean.
 
 ## Quick Start
 
