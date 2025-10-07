@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 5.2.4 - PATCH: Added GRUB validation and improved backup handling with .post-initial-install extension
+# Version: 5.2.5 - FIX: Resolved ZFS boot mount conflicts that broke update-grub
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="5.2.4"
+readonly VERSION="5.2.5"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -1386,7 +1386,7 @@ create_zfs_pools() {
     # Create boot pool
     log_info "Creating boot pool (bpool)..."
     # Note: Using 'eval' here safely because all variables are controlled
-    if ! eval "zpool create ${pool_opts} -o compatibility=grub2 -O devices=off -O acltype=posixacl -O xattr=sa -O compression=lz4 -O normalization=formD -O relatime=on -O canmount=off -O mountpoint=/boot -R /mnt bpool mirror '${part1_boot}' '${part2_boot}'"; then
+    if ! eval "zpool create ${pool_opts} -o compatibility=grub2 -O devices=off -O acltype=posixacl -O xattr=sa -O compression=lz4 -O normalization=formD -O relatime=on -O canmount=off -O mountpoint=none -R /mnt bpool mirror '${part1_boot}' '${part2_boot}'"; then
         log_error "Failed to create boot pool"
         return 1
     fi

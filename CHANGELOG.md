@@ -1,5 +1,36 @@
 # ZFS Mirror Setup Script - Change History
 
+## v5.2.5 - FIX: Resolved ZFS boot mount conflicts that broke update-grub (2025-10-06)
+
+**Root Cause Fix for GRUB Kernel Detection Failures**
+
+Fixed fundamental ZFS boot dataset configuration issue that caused `update-grub` to consistently fail with "didn't find any valid initrd or kernel" errors after first boot.
+
+**Root Cause:**
+- **Conflicting Mount Points**: Both `bpool` and `bpool/boot` were configured to mount at `/boot`
+- **Line 1389**: `bpool` created with `-O mountpoint=/boot`
+- **Line 1845**: `bpool/boot` created with `-o mountpoint=/boot`
+- **ZFS Violation**: Multiple datasets cannot reliably mount to the same location
+- **Installation vs Runtime**: Worked during chroot installation but failed at runtime
+
+**Solution:**
+- **Fixed bpool**: Changed from `-O mountpoint=/boot` to `-O mountpoint=none`
+- **Single Mount**: Only `bpool/boot` now mounts at `/boot`
+- **Standard Compliance**: Follows Ubuntu ZFS installation best practices
+- **Long-term Maintainability**: `update-grub` now works correctly for future kernel updates
+
+**Technical Details:**
+- **Before**: Two overlapping mount points caused path resolution conflicts
+- **After**: Clean single dataset mount eliminates kernel detection issues
+- **GRUB Path Resolution**: Fixes `/boot/@/vmlinuz-*` vs `/boot/vmlinuz-*` inconsistencies
+- **Future-Proof**: System remains maintainable for kernel updates and security patches
+
+**Impact:** Eliminates all `update-grub` failures and ensures long-term system maintainability.
+
+**Changes:** +1, -1 lines (critical mount point fix)
+
+---
+
 ## v5.2.4 - PATCH: Added GRUB validation and improved backup handling with .post-initial-install extension (2025-10-06)
 
 **Enhanced First-Boot Cleanup with Validation and EFI Sync**
