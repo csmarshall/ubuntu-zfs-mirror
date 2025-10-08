@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.0.3 - Fix GRUB force import entry with robust kernel detection
+# Version: 6.0.4 - Centralize configuration prompting and fix timezone selection
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.0.3"
+readonly VERSION="6.0.4"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -576,7 +576,7 @@ usage() {
     echo -e "Original: ${ORIGINAL_REPO}"
     echo ""
     echo -e "${BOLD}Usage:${NC}"
-    echo "  ${SCRIPT_NAME} [--prepare] <hostname> <disk1> <disk2>"
+    echo "  ${SCRIPT_NAME} [--prepare] [--timezone=TIMEZONE] <hostname> <disk1> <disk2>"
     echo "  ${SCRIPT_NAME} --wipe-only <disk1> <disk2>"
     echo ""
     echo -e "${BOLD}Description:${NC}"
@@ -584,8 +584,10 @@ usage() {
     echo "  Both drives will be bootable with automatic failover capability."
     echo ""
     echo -e "${BOLD}Options:${NC}"
-    echo "  --prepare   Wipe drives completely before installation (recommended)"
-    echo "  --wipe-only Just wipe drives without installing"
+    echo "  --prepare              Wipe drives completely before installation (recommended)"
+    echo "  --timezone=TIMEZONE    Set timezone (e.g., --timezone=America/New_York) to skip prompt"
+    echo "                         Valid timezones: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+    echo "  --wipe-only           Just wipe drives without installing"
     echo ""
     echo -e "${BOLD}Arguments:${NC}"
     echo "  hostname    Hostname for the new system (not needed for --wipe-only)"
@@ -879,12 +881,10 @@ prompt_timezone() {
 
     echo "=== Timezone Configuration ===" >&2
     echo "Please select your timezone to prevent interactive prompts during installation." >&2
-    echo "This uses the standard Debian/Ubuntu timezone selection interface." >&2
+    echo "Using tzselect - follow the prompts to select your timezone:" >&2
     echo "" >&2
 
-    # Use the built-in tzselect command for official timezone selection
-    echo "Please follow the prompts to select your timezone:" >&2
-    timezone_choice=$(tzselect 2>/dev/null)
+    timezone_choice=$(tzselect)
 
     # Validate the selection
     if [[ -n "${timezone_choice}" ]] && [[ -f "/usr/share/zoneinfo/${timezone_choice}" ]]; then
@@ -1527,6 +1527,13 @@ if [[ "$1" == "--prepare" ]]; then
     shift  # Remove --prepare from arguments
 fi
 
+# Check for --timezone option
+USER_TIMEZONE=""
+if [[ "$1" == --timezone=* ]]; then
+    USER_TIMEZONE="${1#--timezone=}"
+    shift  # Remove --timezone from arguments
+fi
+
 # Check for wipe-only mode
 if [[ "$1" == "--wipe-only" ]]; then
     if [[ $# -ne 3 ]]; then
@@ -1762,6 +1769,43 @@ if ! perform_pre_destruction_analysis; then
     exit 1
 fi
 
+# ============================================================================
+# CENTRALIZED CONFIGURATION COLLECTION
+# ============================================================================
+# Collect ALL user configuration before starting any destructive operations
+log_header "Configuration Options"
+
+# Get swap size from user
+SWAP_SIZE=$(prompt_swap_size)
+log_info "Swap size selected: ${SWAP_SIZE}"
+
+# Get timezone from user (or use command-line argument)
+if [[ -n "${USER_TIMEZONE}" ]]; then
+    # Validate provided timezone
+    if [[ -f "/usr/share/zoneinfo/${USER_TIMEZONE}" ]]; then
+        TIMEZONE="${USER_TIMEZONE}"
+        log_info "Using timezone from command line: ${TIMEZONE}"
+    else
+        log_warning "Invalid timezone '${USER_TIMEZONE}' provided. Will prompt for selection."
+        TIMEZONE=$(prompt_timezone)
+        log_info "Timezone selected: ${TIMEZONE}"
+    fi
+else
+    TIMEZONE=$(prompt_timezone)
+    log_info "Timezone selected: ${TIMEZONE}"
+fi
+
+# Get additional datasets from user
+ADDITIONAL_DATASETS=$(prompt_additional_datasets)
+if [[ -n "${ADDITIONAL_DATASETS}" ]]; then
+    log_info "Additional datasets selected: ${ADDITIONAL_DATASETS}"
+else
+    log_info "Using default dataset layout only"
+fi
+
+log_info "All configuration collected. Installation will proceed non-interactively."
+echo ""
+
 # If --prepare was specified, wipe drives first
 if [[ "${USE_PREPARE}" == "true" ]]; then
     log_header "Preparing Drives (--prepare mode)"
@@ -1799,24 +1843,7 @@ INSTALL_STATE="preparing"
 systemctl stop zed 2>/dev/null || true
 swapoff -a 2>/dev/null || true
 
-# Interactive configuration prompts
-log_header "Configuration Options"
-
-# Get swap size from user
-SWAP_SIZE=$(prompt_swap_size)
-log_info "Swap size selected: ${SWAP_SIZE}"
-
-# Get timezone from user
-TIMEZONE=$(prompt_timezone)
-log_info "Timezone selected: ${TIMEZONE}"
-
-# Get additional datasets from user
-ADDITIONAL_DATASETS=$(prompt_additional_datasets)
-if [[ -n "${ADDITIONAL_DATASETS}" ]]; then
-    log_info "Additional datasets selected: ${ADDITIONAL_DATASETS}"
-else
-    log_info "Using default dataset layout only"
-fi
+# Configuration collected earlier - proceeding with installation
 
 log_header "Partitioning Drives"
 INSTALL_STATE="partitioning"

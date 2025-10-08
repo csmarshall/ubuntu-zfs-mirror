@@ -1,5 +1,30 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.0.4 - Centralize configuration prompting and fix timezone selection (2025-10-07)
+
+**Improved user experience with centralized configuration collection**
+
+Moved all interactive prompts to happen before any destructive operations begin, eliminating multiple interruptions during installation.
+
+**User Experience Improvements:**
+- **Centralized Configuration**: All prompts (swap, timezone, datasets) collected upfront after validation
+- **No Installation Interruptions**: Once destructive operations start, installation runs completely non-interactively
+- **Fixed Timezone Hanging**: Improved timezone selection with multiple options (tzselect, manual, UTC default)
+- **Clear Progress Indication**: User knows exactly what they're committing to before operations begin
+- **Better Error Handling**: Timezone validation with proper fallbacks
+
+**Technical Changes:**
+- Moved configuration prompting from mid-installation to pre-operation phase
+- Enhanced timezone selection with user-friendly menu and options
+- Fixed stderr redirection that was hiding tzselect prompts
+- Added clear separation between configuration and execution phases
+
+**Flow Improvement:**
+- Before: Validate → Start Operations → Prompt → Continue → Prompt → Continue
+- After: Validate → Collect All Config → Run Installation Non-Interactively
+
+**Line Changes**: +25, -15 (restructuring for better UX)
+
 ## v6.0.3 - Fix GRUB force import entry with robust kernel detection (2025-10-07)
 
 **Critical fix for first-boot GRUB entry generation**
