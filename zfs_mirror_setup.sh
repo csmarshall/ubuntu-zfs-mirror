@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.2.0 - Simplified GRUB kernel parameter approach
+# Version: 6.3.1 - Enhanced logging and debugging support
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.2.0"
+readonly VERSION="6.3.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2916,29 +2916,136 @@ INSTALL_STATE="configuring_first_boot"
 # Configure simplified force import for reliable first boot
 log_info "Configuring first-boot force import for reliable ZFS pool access..."
 
-# Use much simpler approach: modify /etc/default/grub directly
-log_info "Adding zfs_force=1 kernel parameter to GRUB configuration..."
+# Use robust temporary GRUB script approach (no permanent system modifications)
+log_info "Creating temporary GRUB script for reliable force import..."
 
-# Backup original GRUB configuration
-cp /mnt/etc/default/grub /mnt/etc/default/grub.zfs-backup
+# Create temporary GRUB script that generates force import menuentry
+cat > /mnt/etc/grub.d/09_zfs_force_import << 'GRUB_FORCE_SCRIPT_EOF'
+#!/bin/sh
+set -e
 
-# Read current GRUB_CMDLINE_LINUX_DEFAULT
-CURRENT_CMDLINE=$(grep "^GRUB_CMDLINE_LINUX_DEFAULT=" /mnt/etc/default/grub | cut -d'"' -f2 || echo "quiet splash")
+# Only run if cleanup service is enabled (first boot only)
+if ! systemctl is-enabled zfs-firstboot-cleanup.service >/dev/null 2>&1; then
+    logger -t "grub-zfs-force" -p user.info "Cleanup service not enabled, skipping force import menuentry generation"
+    exit 0
+fi
 
-# Read current GRUB_DISTRIBUTOR or set default
-CURRENT_DISTRIBUTOR=$(grep "^GRUB_DISTRIBUTOR=" /mnt/etc/default/grub | cut -d'=' -f2- || echo '`lsb_release -i -s 2> /dev/null || echo Debian`')
+logger -t "grub-zfs-force" -p user.info "Generating temporary ZFS force import menuentry for first boot"
 
-# Backup current distributor for restoration
-echo "GRUB_DISTRIBUTOR_BACKUP=$CURRENT_DISTRIBUTOR" >> /mnt/etc/default/grub.zfs-backup
-echo "GRUB_CMDLINE_LINUX_DEFAULT_BACKUP=\"$CURRENT_CMDLINE\"" >> /mnt/etc/default/grub.zfs-backup
+# Source GRUB configuration
+. /etc/default/grub
 
-# Modify GRUB configuration for first boot with force import
-sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="'"$CURRENT_CMDLINE"' zfs_force=1"/' /mnt/etc/default/grub
-sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="Ubuntu - Force ZFS import first boot"/' /mnt/etc/default/grub
+# Set up environment for GRUB functions
+prefix="/usr"
+datarootdir="/usr/share"
+pkgdatadir="/usr/share/grub"
+. "${datarootdir}/grub/grub-mkconfig_lib"
 
-# Add GRUB_DISTRIBUTOR if it doesn't exist
+# Use standard GRUB_DISTRIBUTOR logic
+if [ "x${GRUB_DISTRIBUTOR}" = "x" ] ; then
+  OS=GNU/Linux
+else
+  case ${GRUB_DISTRIBUTOR} in
+    Ubuntu*)
+        OS="${GRUB_DISTRIBUTOR}"
+        ;;
+    *)
+        OS="${GRUB_DISTRIBUTOR} GNU/Linux"
+        ;;
+  esac
+fi
+
+logger -t "grub-zfs-force" -p user.info "Using OS title: ${OS}"
+
+# Generate CSS class from distributor
+CLASS="--class $(echo ${GRUB_DISTRIBUTOR} | tr 'A-Z' 'a-z' | cut -d' ' -f1 | LC_ALL=C sed 's,[^[:alnum:]_],_,g') --class gnu-linux --class gnu --class os"
+
+# Dynamic kernel detection using GRUB's built-in logic
+list="$(for i in /boot/vmlinuz-* /vmlinuz-* /boot/kernel-*; do
+    if grub_file_is_not_garbage "$i"; then
+        echo -n "$i "
+    fi
+done)"
+prepare_boot_cache="$(prepare_grub_to_access_device ${GRUB_DEVICE_BOOT} | grub_add_tab)"
+
+# Find the default/latest kernel
+kernel=""
+for k in ${list}; do
+    if [ -e "$k" ]; then
+        kernel="$k"
+        break
+    fi
+done
+
+if [ -z "$kernel" ]; then
+    # Fallback: find any vmlinuz
+    kernel="$(ls /boot/vmlinuz-* 2>/dev/null | head -1)"
+    logger -t "grub-zfs-force" -p user.warning "Using fallback kernel detection"
+fi
+
+if [ -n "$kernel" ]; then
+    logger -t "grub-zfs-force" -p user.info "Found kernel: ${kernel}"
+    # Extract version and find initrd
+    version="$(basename "$kernel" | sed 's/vmlinuz-//')"
+
+    # Look for initrd in multiple locations
+    initrd=""
+    for i in "/boot/initrd.img-${version}" "/boot/initrd-${version}.img" "/boot/initrd-${version}.gz" "/boot/initrd-${version}"; do
+        if [ -e "$i" ]; then
+            initrd="$i"
+            break
+        fi
+    done
+
+    if [ -n "$initrd" ]; then
+        logger -t "grub-zfs-force" -p user.info "Found initrd: ${initrd}"
+        # Build complete kernel command line
+        CMDLINE="root=ZFS=\"rpool/root\" ro"
+        if [ -n "$GRUB_CMDLINE_LINUX_DEFAULT" ]; then
+            CMDLINE="$CMDLINE $GRUB_CMDLINE_LINUX_DEFAULT"
+        fi
+        if [ -n "$GRUB_CMDLINE_LINUX" ]; then
+            CMDLINE="$CMDLINE $GRUB_CMDLINE_LINUX"
+        fi
+        CMDLINE="$CMDLINE zfs_force=1"
+
+        logger -t "grub-zfs-force" -p user.info "Generated force import menuentry for kernel ${version} with zfs_force=1"
+        # Generate menuentry
+        echo "menuentry '$(echo "${OS}" | grub_quote)' ${CLASS} \${menuentry_id_option} 'gnulinux-zfs-force-${version}' {"
+        echo "\trecordfail"
+        echo "\tload_video"
+        echo "\tgfxmode \${linux_gfx_mode}"
+        echo "\tinsmod gzio"
+        echo "\tif [ x\${grub_platform} = xxen ]; then insmod xzio; insmod lzopio; fi"
+        echo "\tinsmod part_gpt"
+        echo "\tinsmod zfs"
+
+        # Dynamic boot device access
+        echo "${prepare_boot_cache}"
+
+        echo "\techo\t'$(gettext_printf "Loading Linux %s ..." "${version}")'"
+        echo "\tlinux\t$(make_system_path_relative_to_its_root "${kernel}") ${CMDLINE}"
+        echo "\techo\t'$(gettext_printf "Loading initial ramdisk ...")'"
+        echo "\tinitrd\t$(make_system_path_relative_to_its_root "${initrd}")"
+        echo "}"
+    else
+        logger -t "grub-zfs-force" -p user.error "No initrd found for kernel ${version}"
+    fi
+else
+    logger -t "grub-zfs-force" -p user.error "No kernel found for force import menuentry generation"
+fi
+GRUB_FORCE_SCRIPT_EOF
+
+chmod +x /mnt/etc/grub.d/09_zfs_force_import
+
+# Set GRUB_DISTRIBUTOR for the temporary script to use
 if ! grep -q "^GRUB_DISTRIBUTOR=" /mnt/etc/default/grub; then
     echo 'GRUB_DISTRIBUTOR="Ubuntu - Force ZFS import first boot"' >> /mnt/etc/default/grub
+else
+    # Backup original for restoration
+    CURRENT_DISTRIBUTOR=$(grep "^GRUB_DISTRIBUTOR=" /mnt/etc/default/grub | cut -d'=' -f2-)
+    echo "GRUB_DISTRIBUTOR_BACKUP=$CURRENT_DISTRIBUTOR" > /mnt/etc/default/grub.zfs-backup
+    sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="Ubuntu - Force ZFS import first boot"/' /mnt/etc/default/grub
 fi
 
 # Create comprehensive cleanup script with validation and reboot
@@ -2996,27 +3103,31 @@ rm -f /tmp/zfs-cleanup-test
 
 log_info "All validation checks passed - proceeding with cleanup"
 
-# Remove force import configuration from /etc/default/grub
-log_info "Removing first-boot force import configuration..."
+# Remove temporary force import GRUB script
+log_info "Removing temporary force import GRUB script..."
 
-# Restore original GRUB configuration
-if [[ -f /etc/default/grub.zfs-backup ]]; then
-    # Extract backed up values
-    BACKUP_DISTRIBUTOR=$(grep "^GRUB_DISTRIBUTOR_BACKUP=" /etc/default/grub.zfs-backup | cut -d'=' -f2- || echo '`lsb_release -i -s 2> /dev/null || echo Debian`')
-    BACKUP_CMDLINE=$(grep "^GRUB_CMDLINE_LINUX_DEFAULT_BACKUP=" /etc/default/grub.zfs-backup | cut -d'"' -f2 || echo "quiet splash")
-
-    # Restore original values
-    sed -i "s/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=$BACKUP_DISTRIBUTOR/" /etc/default/grub
-    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="'"$BACKUP_CMDLINE"'"/' /etc/default/grub
-
-    # Remove backup file
-    rm -f /etc/default/grub.zfs-backup
-    log_info "Restored original GRUB configuration"
+# Remove the temporary GRUB script (this is the key to clean rollback)
+if [[ -f /etc/grub.d/09_zfs_force_import ]]; then
+    rm -f /etc/grub.d/09_zfs_force_import
+    log_info "✓ Temporary GRUB script removed: /etc/grub.d/09_zfs_force_import"
 else
-    # Fallback: remove zfs_force=1 manually
-    sed -i 's/ zfs_force=1//g' /etc/default/grub
+    log_warning "Temporary GRUB script not found (may have been removed already)"
+fi
+
+# Restore original GRUB_DISTRIBUTOR if we have a backup
+if [[ -f /etc/default/grub.zfs-backup ]]; then
+    BACKUP_DISTRIBUTOR_LINE=$(grep "^GRUB_DISTRIBUTOR_BACKUP=" /etc/default/grub.zfs-backup || echo "")
+    if [[ -n "$BACKUP_DISTRIBUTOR_LINE" ]]; then
+        BACKUP_DISTRIBUTOR=$(echo "$BACKUP_DISTRIBUTOR_LINE" | cut -d'=' -f2-)
+        sed -i "s/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=$BACKUP_DISTRIBUTOR/" /etc/default/grub
+        log_info "Restored GRUB_DISTRIBUTOR to: $BACKUP_DISTRIBUTOR"
+    fi
+    rm -f /etc/default/grub.zfs-backup
+    log_info "✓ GRUB_DISTRIBUTOR restored from backup"
+else
+    # Fallback: restore default GRUB_DISTRIBUTOR
     sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=`lsb_release -i -s 2> \/dev\/null || echo Debian`/' /etc/default/grub
-    log_warning "Backup not found, used fallback cleanup"
+    log_info "✓ GRUB_DISTRIBUTOR restored to default (backup not found)"
 fi
 
 # Update GRUB configuration
@@ -3065,22 +3176,37 @@ show_progress 10 10 "Installation complete!"
 log_info "Updating GRUB configuration with force import parameter..."
 chroot /mnt update-grub
 
-# Validate that force import parameter was properly added
+# Validate that temporary GRUB script was created
 log_info "Validating force import configuration..."
-if chroot /mnt grep -q "zfs_force=1" /boot/grub/grub.cfg; then
-    log_info "✓ Force import parameter confirmed in GRUB configuration"
+if [[ -f /mnt/etc/grub.d/09_zfs_force_import && -x /mnt/etc/grub.d/09_zfs_force_import ]]; then
+    log_info "✓ Temporary GRUB script created: /etc/grub.d/09_zfs_force_import"
 else
-    log_error "CRITICAL: zfs_force=1 parameter not found in GRUB configuration!"
+    log_error "CRITICAL: Temporary GRUB script not found or not executable!"
     log_error "Force import setup failed"
     exit 1
 fi
 
+# Validate that force import entry appears in GRUB configuration
+if chroot /mnt grep -q "zfs_force=1" /boot/grub/grub.cfg; then
+    log_info "✓ Force import parameter confirmed in GRUB configuration"
+else
+    log_error "CRITICAL: zfs_force=1 parameter not found in GRUB configuration!"
+    log_error "Temporary script may not be working properly"
+    exit 1
+fi
+
 # Validate menu title was updated
-MENU_TITLE=$(chroot /mnt grep "menuentry.*Ubuntu" /boot/grub/grub.cfg | head -1 | cut -d"'" -f2 || echo "")
+MENU_TITLE=$(chroot /mnt grep "menuentry.*Force ZFS import" /boot/grub/grub.cfg | head -1 | cut -d"'" -f2 || echo "")
 if [[ "$MENU_TITLE" == *"Force ZFS import"* ]]; then
     log_info "✓ Menu title updated: $MENU_TITLE"
 else
-    log_warning "Menu title may not have updated properly: $MENU_TITLE"
+    log_warning "Custom menu title not found, checking for any force import entry..."
+    if chroot /mnt grep -q "gnulinux-zfs-force" /boot/grub/grub.cfg; then
+        log_info "✓ Force import entry found in GRUB configuration"
+    else
+        log_error "No force import entry found in GRUB configuration"
+        exit 1
+    fi
 fi
 
 # Final summary of the simplified force import approach

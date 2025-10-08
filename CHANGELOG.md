@@ -1,5 +1,65 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.3.1 - Enhanced logging and debugging support (2025-10-08)
+
+**Comprehensive Logging Implementation**
+
+Added comprehensive logging to all dynamically generated scripts to ensure clear debugging and monitoring capabilities throughout the ZFS setup and first-boot process.
+
+**Logging Enhancements:**
+- **Temporary GRUB Script**: Added detailed logging to `/etc/grub.d/09_zfs_force_import` with `grub-zfs-force` tag
+  - Service state validation logging
+  - OS title detection logging
+  - Kernel and initrd discovery logging
+  - Menuentry generation success/failure logging
+  - Fallback detection warnings
+- **Syslog Integration**: All logs use `logger` command with appropriate priority levels (`user.info`, `user.warning`, `user.error`)
+- **Clear Identification**: Each script uses unique logging tags for easy log filtering and debugging
+
+**Debugging Benefits:**
+- ✅ **First-Boot Visibility**: Clear logs showing GRUB script execution during boot configuration
+- ✅ **Error Diagnosis**: Specific error messages when kernel/initrd detection fails
+- ✅ **Process Tracking**: Step-by-step logging of force import menuentry generation
+- ✅ **Service Integration**: Logs integrate with existing cleanup service logging framework
+
+**User Impact:** System administrators can now easily track ZFS force import configuration through syslog with commands like `journalctl -t grub-zfs-force` and `journalctl -t zfs-firstboot-cleanup`.
+
+**Changes:** +12 lines of logging enhancements
+
+----
+
+## v6.3.0 - Robust temporary GRUB script approach (2025-10-08)
+
+**No Permanent System Modifications - Guaranteed Flawless Rollback**
+
+Replaced all permanent system modifications with a temporary GRUB script approach that ensures no permanent changes and provides guaranteed clean rollback to exact original state.
+
+**Critical Robustness Improvements:**
+- **No Permanent Modifications**: Never modifies system files like `/etc/grub.d/10_linux_zfs`
+- **No Bug Dependencies**: Does not depend on Ubuntu ZFS script bugs or fixes
+- **Guaranteed Rollback**: System returns to exact original state after cleanup
+- **Dynamic Kernel Detection**: No hardcoded kernel versions or paths
+- **Serial Console Support**: Inherits existing `GRUB_CMDLINE_LINUX` settings automatically
+
+**Technical Implementation:**
+- **Temporary Script**: Creates `/etc/grub.d/09_zfs_force_import` (removed after first boot)
+- **Standard GRUB Logic**: Uses GRUB's built-in functions (`grub_file_is_not_garbage`, `make_system_path_relative_to_its_root`)
+- **Dynamic Detection**: Automatically finds kernels and initrd files without hardcoding
+- **Service Integration**: Only runs when cleanup service is enabled (first boot only)
+
+**Robust Architecture:**
+- ✅ **Zero Permanent Changes**: No system files are permanently modified
+- ✅ **Self-Contained**: All configuration is temporary and self-cleaning
+- ✅ **Version Independent**: Works with any kernel version or system updates
+- ✅ **Flawless Cleanup**: Script removes itself completely after first boot
+- ✅ **Standard Compliance**: Uses official GRUB script patterns and functions
+
+**User Impact:** First boot shows custom title with force import, then system automatically returns to exact original configuration with zero trace of modifications.
+
+**Changes:** Architectural improvement with robust temporary approach
+
+----
+
 ## v6.2.0 - Simplified GRUB kernel parameter approach (2025-10-08)
 
 **Major Simplification - Eliminated Complex GRUB Script Generation**
