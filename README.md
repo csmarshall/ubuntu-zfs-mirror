@@ -31,6 +31,24 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 
 **⚠️ UEFI Only**: This script is designed exclusively for UEFI systems and will not work with Legacy BIOS/MBR boot modes. The EFI System Partition and GRUB EFI configuration are essential components of the installation.
 
+## Network Configuration
+
+The script automatically configures networking during installation:
+
+**Auto-Detection:**
+- Scans `/sys/class/net/` for physical network interfaces
+- Skips virtual interfaces and loopback
+- Selects the first physical interface found (e.g., `enp0s3`, `eno1`, `eth0`)
+- Falls back to `enp0s3` if no interfaces detected
+
+**Netplan Configuration:**
+- Creates `/etc/netplan/01-netcfg.yaml` with DHCP enabled
+- Interface set to `optional: true` (system boots even if network is down)
+- IPv4 DHCP configured automatically
+
+**Post-Installation:**
+To configure static IP or change network settings, edit `/etc/netplan/01-netcfg.yaml` and run `sudo netplan apply`.
+
 ## First Boot Behavior
 
 With the **v6.1.0 single-pool architecture**, first boot uses a clean force import mechanism for maximum reliability.
@@ -605,15 +623,280 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.3.4 - Unified boot sync with comprehensive hooks
+- **Script Version**: 6.4.0 - Fixed EFI architecture for proper drive-specific partitions
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
 
 ### Key Technical Features
 - **GRUB2 Compatibility**: Boot pool configured with `compatibility=grub2`
-- **UEFI Integration**: Proper EFI System Partition setup with deterministic volume IDs
+- **UEFI Integration**: Proper EFI System Partition setup with drive-specific bootloader folders
 - **AppArmor Support**: Configurable security (enabled by default)
+
+## EFI Partition Architecture & Boot Redundancy
+
+### Overview
+
+Each drive has its own EFI partition with its own drive-specific bootloader folder. This ensures complete boot redundancy - if any drive fails, the system can boot from the remaining drives.
+
+### EFI Partition Structure
+
+**Drive 1 EFI Partition:**
+```
+/boot/efi/
+├── EFI/
+│   ├── BOOT/                              # Fallback bootloader (all drives)
+│   │   └── BOOTX64.EFI
+│   └── Ubuntu-DriveModel1-ABC1/           # Drive-specific folder (model + serial)
+│       ├── shimx64.efi                    # Secure boot shim
+│       ├── grubx64.efi                    # GRUB bootloader
+│       ├── mmx64.efi                      # MOK manager
+│       ├── grub.cfg                       # Mini config (searches for ZFS)
+│       └── BOOTX64.CSV
+```
+
+**Drive 2 EFI Partition:**
+```
+/boot/efi/
+├── EFI/
+│   ├── BOOT/                              # Fallback bootloader (all drives)
+│   │   └── BOOTX64.EFI
+│   └── Ubuntu-DriveModel2-XYZ2/           # Different drive-specific folder
+│       ├── shimx64.efi
+│       ├── grubx64.efi
+│       ├── mmx64.efi
+│       ├── grub.cfg                       # Same ZFS UUID search
+│       └── BOOTX64.CSV
+```
+
+**Key Points:**
+- ✅ Each drive has ONLY its own folder (no duplicates)
+- ✅ Folder names are drive-specific (based on model + serial)
+- ✅ File contents are identical (synced during updates)
+- ✅ All drives have /EFI/BOOT/ fallback bootloader
+
+### Boot Process Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    NORMAL BOOT (Drive 1)                    │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. UEFI Firmware → Selects Boot Entry (Boot0002)          │
+│  2. Loads from Drive 1 EFI partition:                       │
+│     /EFI/Ubuntu-DriveModel1-ABC1/shimx64.efi               │
+│  3. shimx64.efi → grubx64.efi → reads grub.cfg             │
+│  4. grub.cfg contains:                                      │
+│     search.fs_uuid <zfs-pool-uuid> root                    │
+│     set prefix=($root)'/root@/boot/grub'                   │
+│     configfile $prefix/grub.cfg                             │
+│  5. Searches for ZFS filesystem by UUID (not drive!)       │
+│  6. Finds rpool, loads /boot/grub/grub.cfg from ZFS        │
+│  7. GRUB boots kernel from ZFS pool                         │
+│  8. System boots ✓                                          │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│            FAILOVER BOOT (Drive 1 Failed)                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. UEFI Firmware → Boot0002 fails (Drive 1 dead)          │
+│  2. UEFI tries next entry (Boot0000 - Drive 2)             │
+│  3. Loads from Drive 2 EFI partition:                       │
+│     /EFI/Ubuntu-DriveModel2-XYZ2/shimx64.efi               │
+│  4. shimx64.efi → grubx64.efi → reads grub.cfg             │
+│  5. grub.cfg: SAME UUID SEARCH (<zfs-pool-uuid>)           │
+│  6. Finds rpool on Drive 2 (mirrored)                       │
+│  7. Loads /boot/grub/grub.cfg from ZFS                      │
+│  8. GRUB boots kernel from ZFS pool                         │
+│  9. System boots from Drive 2 ✓                            │
+│     (ZFS pool degraded but functional)                      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why This Works:**
+- The mini grub.cfg searches by ZFS UUID, not drive path
+- ZFS UUID is the same across all mirror drives
+- Whichever drive boots, it finds the ZFS pool and loads the real grub.cfg
+- Complete boot independence per drive
+
+### Synchronization Strategy
+
+**During Installation:**
+1. `grub-install` runs for each drive with `--bootloader-id=Ubuntu-<DriveID>`
+2. Each drive gets its own bootloader folder in its own EFI partition
+3. UEFI boot entries created pointing to each drive's specific folder
+
+**During Updates (Kernel, GRUB, Initramfs):**
+1. Updates write to `/boot/efi` (whichever EFI partition is currently mounted)
+2. Hooks trigger `/usr/local/bin/sync-mirror-boot`
+3. `sync-mirror-boot` calls `sync-grub-to-mirror-drives`:
+   - Finds all EFI partitions by shared UUID
+   - For mounted partition: runs grub-install normally
+   - For unmounted partitions: mounts temporarily, runs grub-install with custom path
+   - Each grub-install uses drive-specific --bootloader-id
+4. Bootloader files automatically synced to all drives' folders
+
+**Automatic Sync Triggers:**
+- ✅ Kernel updates → `/etc/kernel/postinst.d/zz-sync-mirror-boot`
+- ✅ Kernel removals → `/etc/kernel/postrm.d/zz-sync-mirror-boot`
+- ✅ Initramfs updates → `/etc/initramfs/post-update.d/zz-sync-mirror-boot`
+- ✅ Manual update-grub → `/etc/grub.d/99-zfs-mirror-sync`
+
+### Manual Sync Commands
+
+```bash
+# Sync GRUB to all drives (recommended)
+sudo /usr/local/bin/sync-mirror-boot
+
+# Sync GRUB only
+sudo /usr/local/bin/sync-grub-to-mirror-drives
+
+# Check EFI partition structure
+ls -la /boot/efi/EFI/
+
+# Check UEFI boot entries
+efibootmgr -v
+```
+
+### Troubleshooting EFI Issues
+
+**Multiple folders on one partition?**
+```bash
+# This is WRONG - each partition should have only one Ubuntu-* folder
+/boot/efi/EFI/Ubuntu-DriveModel1-*/
+/boot/efi/EFI/Ubuntu-DriveModel2-*/   # Should NOT be on same partition!
+
+# Fix: Run sync-mirror-boot to recreate correct structure
+sudo /usr/local/bin/sync-mirror-boot
+```
+
+**Generic 'ubuntu' folder exists?**
+```bash
+# Old broken sync created /EFI/ubuntu (lowercase)
+# Safe to delete if drive-specific folders exist and boot entries are correct
+ls -la /boot/efi/EFI/
+efibootmgr -v   # Verify boot entries point to Ubuntu-* folders
+sudo rm -rf /boot/efi/EFI/ubuntu  # Only if boot entries are correct!
+```
+
+**Boot entry points to wrong folder?**
+```bash
+# Check boot entries
+efibootmgr -v
+
+# Should see entries like:
+# Boot0002* Ubuntu  HD(...)/File(\EFI\Ubuntu-DriveModel1-ABC1\shimx64.efi)
+
+# If pointing to generic /EFI/ubuntu, run:
+sudo /usr/local/bin/sync-grub-to-mirror-drives
+```
+
+### BIOS/UEFI Configuration for ZFS Mirror Boot
+
+After installation, configure your BIOS/UEFI settings to maximize boot redundancy and ensure proper failover behavior.
+
+#### Recommended Boot Configuration
+
+**1. Boot Mode Settings:**
+```
+Boot Mode:           UEFI (NOT Legacy/CSM)
+Secure Boot:         Enabled (Ubuntu signed bootloader supported)
+Fast Boot:           Disabled (allows proper drive enumeration)
+```
+
+**2. Boot Priority Order:**
+
+Set boot entries in this priority order:
+```
+1st Boot Device:     Ubuntu-DriveModel1-ABC1    (Primary drive)
+2nd Boot Device:     Ubuntu-DriveModel2-XYZ2    (Mirror drive)
+3rd Boot Device:     UEFI: Built-in EFI Shell   (Optional)
+```
+
+**Why this order matters:**
+- Primary drive boots normally
+- If primary fails, UEFI automatically tries mirror drive
+- No manual intervention needed for failover
+
+**3. Drive-Specific Settings (varies by manufacturer):**
+
+**ASRock / ASUS / MSI / Gigabyte:**
+```
+SATA Configuration:
+  SATA Mode:         AHCI (NOT RAID or IDE)
+  Hot Plug:          Enabled (for drive replacement)
+
+NVMe Configuration:
+  NVMe RAID:         Disabled (ZFS handles RAID)
+  NVMe Boot:         Enabled
+```
+
+**SuperMicro / Dell / HP Enterprise:**
+```
+Boot Settings:
+  Boot Mode:         UEFI
+  UEFI Boot Order:   Configure per-drive boot entries
+  Network Boot:      Disabled (unless needed)
+
+Storage Settings:
+  Controller Mode:   HBA/IT Mode (NOT RAID mode)
+  Hot Swap:          Enabled
+```
+
+#### Post-Installation: Verify Boot Entries
+
+After running the installation script, boot into BIOS/UEFI and verify:
+
+1. **Check Boot Menu** - Should show individual entries for each drive:
+   ```
+   Ubuntu-DriveModel1-ABC1
+   Ubuntu-DriveModel2-XYZ2
+   ```
+
+2. **Set Boot Priority** - Arrange entries so either drive can boot first
+
+3. **Test Failover**:
+   - Boot normally (verify Drive 1 boots)
+   - Reboot, enter BIOS, manually select Drive 2
+   - Verify Drive 2 can boot independently
+
+#### Common BIOS/UEFI Issues
+
+**Issue: Only one Ubuntu entry appears**
+- **Cause**: UEFI firmware may hide duplicate "Ubuntu" entries
+- **Fix**: Boot entries have unique names (Ubuntu-DriveModel1, Ubuntu-DriveModel2)
+- **Action**: Verify with `efibootmgr -v` from within Ubuntu
+
+**Issue: Boot entries disappear after updates**
+- **Cause**: Some UEFI firmware resets boot order
+- **Fix**: Re-run `/usr/local/bin/sync-grub-to-mirror-drives`
+- **Prevention**: Check BIOS settings for "Windows UEFI firmware update" - disable it
+
+**Issue: System won't boot from second drive**
+- **Cause**: Secure Boot key only on first drive
+- **Fix**: Both drives have identical shim/bootloader (signed)
+- **Action**: Verify both drives in boot menu, try manual selection
+
+#### Platform-Specific Notes
+
+**ASRock ROMED8-2T (EPYC Platform):**
+- Set "CSM Support" to Disabled
+- Enable "Above 4G Decoding" for NVMe
+- Boot Device Priority: Set specific UEFI entries, not generic "Hard Disk"
+
+**Standard Desktop Platforms (AMD/Intel):**
+- Disable "Fast Startup" in BIOS
+- Enable "UEFI Network Stack" only if PXE boot needed
+- Set "Boot Device Priority" to specific drives, not categories
+
+**Enterprise Platforms (SuperMicro/Dell/HP):**
+- Configure IPMI/iDRAC to monitor ZFS pool status
+- Enable "EFI Boot" for each drive individually
+- Disable proprietary RAID controllers (use HBA mode)
+
 - **Drive Failure Simulation**: Built-in commands for testing resilience
 - **EFI Sync Utility**: Automatic synchronization between EFI partitions
 - **Smart EFI Naming**: Drive-specific UEFI folder names for disambiguation

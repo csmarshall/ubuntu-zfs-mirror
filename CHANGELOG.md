@@ -1,5 +1,90 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.4.0 - Fixed EFI architecture for proper drive-specific partitions (2025-10-08)
+
+**CRITICAL ARCHITECTURE FIX - Proper EFI Partition Management**
+
+Fixed fundamental EFI synchronization architecture where all drives were getting all EFI folders instead of each drive having only its own drive-specific folder.
+
+**The Problem:**
+- Previous sync logic copied ALL EFI folders to ALL drives' EFI partitions
+- Result: Every drive had folders for EVERY drive (confusing, wrong)
+- Example: Drive 1 had both `/EFI/Ubuntu-DriveModel1-*` AND `/EFI/Ubuntu-DriveModel2-*`
+
+**The Solution:**
+- Each drive's EFI partition now contains ONLY its own drive-specific folder
+- Drive 1 EFI partition: `/EFI/Ubuntu-DriveModel1-ABC1/` only
+- Drive 2 EFI partition: `/EFI/Ubuntu-DriveModel2-XYZ2/` only
+- Plus `/EFI/BOOT/` fallback bootloader on all drives
+
+**How It Works:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    BOOT PROCESS FLOW                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. UEFI Firmware selects boot drive (e.g., Drive 1)       │
+│  2. Mounts Drive 1 EFI partition                            │
+│  3. Loads /EFI/Ubuntu-DriveModel1-ABC1/shimx64.efi         │
+│  4. Shim → grubx64.efi → reads mini grub.cfg               │
+│  5. Mini grub.cfg: "search UUID, load real grub.cfg"       │
+│  6. Finds ZFS pool by UUID (works from any drive!)         │
+│  7. Loads /boot/grub/grub.cfg from ZFS                     │
+│  8. System boots ✓                                          │
+│                                                             │
+│  IF Drive 1 fails:                                          │
+│  - UEFI tries next drive (Drive 2)                         │
+│  - Loads /EFI/Ubuntu-DriveModel2-XYZ2/shimx64.efi          │
+│  - Same process, same ZFS UUID search                       │
+│  - System boots from Drive 2 ✓                             │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Technical Changes:**
+
+1. **Rewrote sync-grub-to-mirror-drives**:
+   - Discovers all EFI partitions by UUID
+   - Maps each partition to its base drive
+   - For mounted partition: runs grub-install normally
+   - For unmounted partitions: mounts temporarily, runs grub-install with custom --efi-directory
+   - Each grub-install uses drive-specific --bootloader-id
+
+2. **Rewrote sync-efi-partitions** (now actually works correctly):
+   - Finds Ubuntu-* folder on mounted partition (source)
+   - Finds Ubuntu-* folder on each unmounted partition (different name, different target)
+   - Syncs FILE CONTENTS between folders (keeps folder names separate)
+   - Also syncs /EFI/BOOT/ fallback bootloader
+
+3. **Simplified sync-mirror-boot**:
+   - Just runs sync-grub-to-mirror-drives (which now handles everything correctly)
+   - No complex multi-step process needed
+
+**Why This Works for Recovery:**
+
+The mini grub.cfg in each EFI folder contains:
+```
+search.fs_uuid <zfs-pool-uuid> root
+set prefix=($root)'/root@/boot/grub'
+configfile $prefix/grub.cfg
+```
+
+This searches for ZFS by UUID (not drive-specific) so it works regardless of which drive boots!
+
+**User Impact:**
+- Clean EFI partition structure (no duplicate folders)
+- Each drive fully bootable independently
+- UEFI boot menu shows correct drive-specific entries
+- Drive failure recovery works correctly
+
+**Files Modified:**
+- `/usr/local/bin/sync-grub-to-mirror-drives` - Complete rewrite for per-partition installation
+- `/usr/local/bin/sync-efi-partitions` - Rewrite to sync files only (not create duplicate folders)
+- `/usr/local/bin/sync-mirror-boot` - Simplified to just call grub sync
+
+----
+
 ## v6.3.4 - Unified boot sync with comprehensive hooks (2025-10-08)
 
 **Major Improvement - Complete Mirror Synchronization**
@@ -21,36 +106,6 @@ Replaced fragmented sync mechanisms with a unified, comprehensive boot synchroni
 - ✅ GRUB package updates → kernel hooks catch it
 
 **User Impact:** All mirror drives automatically stay in sync. Fast updates (no os-prober). No manual intervention needed.
-
-----
-
-## v6.3.3 - Fixed service creation order (2025-10-08)
-
-**Critical Bug Fix - Service Creation Before GRUB Generation**
-
-Fixed installation failure where `update-grub` would run before the cleanup service was created, causing the GRUB force import script to exit early without generating the required menuentry.
-
-**Root Cause:**
-- GRUB script creation at line 2946
-- `update-grub` execution at line 3222
-- Service creation at line 3269 (AFTER update-grub!)
-- GRUB script checked for service existence → not found → exited early → no menuentry generated
-
-**Solution:**
-- Moved service creation and enablement to lines 3213-3233 (BEFORE update-grub)
-- Removed duplicate service creation that occurred after update-grub
-- Added clear comments explaining the ordering requirement
-
-**Execution Order (Fixed):**
-1. Create GRUB force import script
-2. Create cleanup script
-3. **Create and enable cleanup service** ✓
-4. Run update-grub (now sees enabled service) ✓
-5. Validate configuration
-
-**User Impact:** Installation now completes successfully. The `zfs_force=1` parameter correctly appears in grub.cfg and all validation tests pass.
-
-**Test Script:** Added `test_grub_force_import.sh` for validating the GRUB force import configuration in debug environments.
 
 ----
 

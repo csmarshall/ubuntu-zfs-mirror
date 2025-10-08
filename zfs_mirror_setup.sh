@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.3.2"
+readonly VERSION="6.4.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -1381,7 +1381,29 @@ ZFS_DEFAULTS_EOF
 create_efi_sync_script() {
     cat << 'EFI_SYNC_SCRIPT' > /mnt/usr/local/bin/sync-efi-partitions
 #!/bin/bash
-# EFI Partition Sync Script for ZFS Mirror Drives\n# \n# CREATED BY: Ubuntu ZFS Mirror Root Installation Script (v${VERSION})\n# PURPOSE: Sync EFI partitions between mirror drives with identical UUIDs\n# LOCATION: /usr/local/bin/sync-efi-partitions\n# \n# This script automatically syncs the EFI System Partition content between\n# mirror drives. It runs automatically after kernel updates via APT hooks.\n#
+# EFI Partition Sync Script for ZFS Mirror Drives
+#
+# CREATED BY: Ubuntu ZFS Mirror Root Installation Script (v${VERSION})
+# PURPOSE: Sync EFI bootloader files between mirror drives for redundancy
+# LOCATION: /usr/local/bin/sync-efi-partitions
+#
+# DESIGN PHILOSOPHY:
+# - Each drive has its own EFI partition with its own drive-specific folder
+# - Only ONE EFI partition is mounted at /boot/efi (whichever drive booted)
+# - When GRUB/kernel updates happen, they only write to the mounted partition
+# - This script syncs the FILE CONTENTS between drive-specific folders
+# - Each folder keeps its own name but contains identical bootloader files
+#
+# EXAMPLE:
+#   Booted from Drive 1 (Samsung):
+#   - /boot/efi/EFI/Ubuntu-Samsung-SSD-990-363M/ (mounted, updated by system)
+#   - Sync files → Drive 2: /EFI/Ubuntu-CT1000T500SSD8-5ADF/ (unmounted)
+#
+# RECOVERY:
+#   If Drive 1 fails, UEFI boots from Drive 2's folder, which has the same
+#   bootloader files. The grub.cfg just searches for ZFS UUID, so it works
+#   regardless of which drive booted.
+#
 set -euo pipefail
 
 log_message() {
@@ -1408,68 +1430,77 @@ fi
 # Find all partitions with this UUID
 mapfile -t EFI_PARTITIONS < <(blkid --output device --match-token UUID="${EFI_UUID}" 2>/dev/null || true)
 
-if [[ ${#EFI_PARTITIONS[@]} -ne 2 ]]; then
-    log_message "ERROR: Expected 2 EFI partitions, found ${#EFI_PARTITIONS[@]}"
+if [[ ${#EFI_PARTITIONS[@]} -lt 2 ]]; then
+    log_message "WARNING: Only ${#EFI_PARTITIONS[@]} EFI partition(s) found, expected 2+"
+    exit 0
+fi
+
+# Find source Ubuntu folder on mounted partition
+SOURCE_UBUNTU_FOLDER=$(find /boot/efi/EFI/ -maxdepth 1 -name "Ubuntu-*" -type d 2>/dev/null | head -1)
+if [[ -z "${SOURCE_UBUNTU_FOLDER}" ]]; then
+    log_message "ERROR: No Ubuntu-* folder found in mounted EFI partition"
     exit 1
 fi
 
-# Find the other partition (the one not currently mounted)
-TARGET_EFI=""
+SOURCE_FOLDER_NAME=$(basename "${SOURCE_UBUNTU_FOLDER}")
+log_message "Source folder: ${SOURCE_FOLDER_NAME} (from ${MOUNTED_EFI})"
+
+# Sync to each unmounted EFI partition
+SYNC_COUNT=0
 for partition in "${EFI_PARTITIONS[@]}"; do
-    if [[ "${partition}" != "${MOUNTED_EFI}" ]]; then
-        TARGET_EFI="${partition}"
-        break
+    if [[ "${partition}" == "${MOUNTED_EFI}" ]]; then
+        continue
     fi
+
+    log_message "Syncing to ${partition}..."
+
+    TARGET_MOUNT=$(mktemp -d)
+
+    if ! mount "${partition}" "${TARGET_MOUNT}"; then
+        log_message "  ERROR: Failed to mount ${partition}"
+        rmdir "${TARGET_MOUNT}"
+        continue
+    fi
+
+    # Find the Ubuntu folder on this target partition (should have different name)
+    TARGET_UBUNTU_FOLDER=$(find "${TARGET_MOUNT}/EFI/" -maxdepth 1 -name "Ubuntu-*" -type d 2>/dev/null | head -1)
+
+    if [[ -z "${TARGET_UBUNTU_FOLDER}" ]]; then
+        log_message "  WARNING: No Ubuntu-* folder found on ${partition}, skipping"
+        umount "${TARGET_MOUNT}"
+        rmdir "${TARGET_MOUNT}"
+        continue
+    fi
+
+    TARGET_FOLDER_NAME=$(basename "${TARGET_UBUNTU_FOLDER}")
+    log_message "  Target folder: ${TARGET_FOLDER_NAME}"
+
+    # Sync bootloader files (shimx64.efi, grubx64.efi, grub.cfg, etc.)
+    if rsync -av --delete "${SOURCE_UBUNTU_FOLDER}/" "${TARGET_UBUNTU_FOLDER}/" >/dev/null 2>&1; then
+        log_message "  ✓ Files synced: ${SOURCE_FOLDER_NAME} → ${TARGET_FOLDER_NAME}"
+        ((SYNC_COUNT++))
+    else
+        log_message "  ERROR: Failed to sync files to ${TARGET_FOLDER_NAME}"
+    fi
+
+    # Also sync /EFI/BOOT/ fallback bootloader
+    if [[ -d /boot/efi/EFI/BOOT ]]; then
+        mkdir -p "${TARGET_MOUNT}/EFI/BOOT"
+        if rsync -av --delete /boot/efi/EFI/BOOT/ "${TARGET_MOUNT}/EFI/BOOT/" >/dev/null 2>&1; then
+            log_message "  ✓ /EFI/BOOT/ fallback synced"
+        fi
+    fi
+
+    umount "${TARGET_MOUNT}"
+    rmdir "${TARGET_MOUNT}"
 done
 
-if [[ -z "${TARGET_EFI}" ]]; then
-    log_message "ERROR: Could not find unmounted EFI partition"
+if [[ ${SYNC_COUNT} -eq 0 ]]; then
+    log_message "WARNING: No partitions were synced"
     exit 1
 fi
 
-log_message "Syncing EFI: ${MOUNTED_EFI} (mounted) -> ${TARGET_EFI}"
-
-# Mount and sync
-TARGET_MOUNT=$(mktemp -d)
-
-if ! mount "${TARGET_EFI}" "${TARGET_MOUNT}"; then
-    log_message "ERROR: Failed to mount target EFI partition"
-    rmdir "${TARGET_MOUNT}"
-    exit 1
-fi
-
-# Sync generic BOOT directory
-rsync -av /boot/efi/EFI/BOOT/ "${TARGET_MOUNT}/EFI/BOOT/" 2>/dev/null || {
-    log_message "Warning: Could not sync EFI/BOOT directory"
-}
-
-# Find source Ubuntu folder (currently mounted drive's folder)
-SOURCE_UBUNTU_FOLDER=$(find /boot/efi/EFI/ -maxdepth 1 -name "Ubuntu-*" -type d | head -1)
-if [[ -z "${SOURCE_UBUNTU_FOLDER}" ]]; then
-    log_message "ERROR: No Ubuntu folder found in source EFI partition"
-    exit 1
-fi
-
-# Find or create target Ubuntu folder (unmounted drive's folder should exist)
-TARGET_UBUNTU_FOLDER=$(find "${TARGET_MOUNT}/EFI/" -maxdepth 1 -name "Ubuntu-*" -type d | head -1)
-if [[ -z "${TARGET_UBUNTU_FOLDER}" ]]; then
-    log_message "Warning: No Ubuntu folder found in target EFI partition, copying source folder structure"
-    TARGET_FOLDER_NAME=$(basename "${SOURCE_UBUNTU_FOLDER}")
-    TARGET_UBUNTU_FOLDER="${TARGET_MOUNT}/EFI/${TARGET_FOLDER_NAME}"
-    mkdir -p "${TARGET_UBUNTU_FOLDER}"
-fi
-
-# Sync Ubuntu folder contents (preserving target folder name)
-log_message "Syncing $(basename "${SOURCE_UBUNTU_FOLDER}") -> $(basename "${TARGET_UBUNTU_FOLDER}")"
-rsync -av "${SOURCE_UBUNTU_FOLDER}/" "${TARGET_UBUNTU_FOLDER}/" 2>/dev/null || {
-    log_message "ERROR: Failed to sync Ubuntu folder contents"
-    exit 1
-}
-
-umount "${TARGET_MOUNT}"
-rmdir "${TARGET_MOUNT}"
-
-log_message "EFI sync completed"
+log_message "EFI sync completed successfully (${SYNC_COUNT} partition(s) synced)"
 EFI_SYNC_SCRIPT
 
     chmod +x /mnt/usr/local/bin/sync-efi-partitions
@@ -2479,6 +2510,10 @@ cat << 'GRUB_SYNC_SCRIPT' > /mnt/usr/local/bin/sync-grub-to-mirror-drives
 # pools and installs GRUB to each drive for full redundancy. It runs
 # automatically during installation and can be run manually for maintenance.
 #
+# IMPORTANT: grub-install creates drive-specific EFI folders (Ubuntu-<DriveID>)
+# on each drive's EFI partition. This ensures each drive has its own bootloader
+# folder in its own EFI partition, enabling independent booting.
+#
 
 set -euo pipefail
 
@@ -2487,99 +2522,167 @@ log_info() { logger -t "sync-grub-to-mirror-drives" -p user.info "$1"; echo "$1"
 log_error() { logger -t "sync-grub-to-mirror-drives" -p user.err "$1"; echo "ERROR: $1" >&2; }
 log_warning() { logger -t "sync-grub-to-mirror-drives" -p user.warning "$1"; echo "WARNING: $1"; }
 
+# Get drive identifier for EFI folder naming (same logic as installation)
+get_drive_identifier() {
+    local disk_path="$1"
+    local model_part=""
+    local suffix_part=""
+
+    # Extract model and suffix from by-id path
+    if [[ "${disk_path}" =~ nvme-(.+)_([A-Za-z0-9-]{8,})$ ]]; then
+        model_part="${BASH_REMATCH[1]}"
+        suffix_part="${BASH_REMATCH[2]}"
+    elif [[ "${disk_path}" =~ (ata|scsi)-(.+)_([A-Za-z0-9-]{8,})$ ]]; then
+        model_part="${BASH_REMATCH[2]}"
+        suffix_part="${BASH_REMATCH[3]}"
+    else
+        local dev_name=$(basename "${disk_path}")
+        model_part="Disk"
+        suffix_part="${dev_name}"
+    fi
+
+    # Clean up model part
+    model_part="${model_part//_/-}"
+    model_part="${model_part##-}"
+    model_part="${model_part%%-}"
+    while [[ "${model_part}" == *"--"* ]]; do
+        model_part="${model_part//--/-}"
+    done
+
+    # Truncate to 15 chars
+    if [[ ${#model_part} -gt 15 ]]; then
+        model_part="${model_part:0:15}"
+        model_part="${model_part%-}"
+    fi
+
+    # Get last 4 from suffix
+    local last_four="${suffix_part: -4}"
+    if [[ ${#last_four} -lt 4 ]]; then
+        last_four=$(printf "%04s" "${last_four}" | tr ' ' '0')
+    fi
+
+    echo "${model_part}-${last_four}"
+}
+
 log_info "Syncing GRUB to all ZFS mirror drives..."
 
-# Discover drives from rpool
-DRIVES=()
-for pool in rpool; do
-    if zpool status "$pool" &>/dev/null; then
-        while IFS= read -r drive; do
-            if [[ "$drive" =~ ^(.*)-part[0-9]+$ ]]; then
-                # Add /dev/disk/by-id/ prefix if not present
-                drive_base="${BASH_REMATCH[1]}"
-                if [[ "$drive" =~ ^/dev/disk/by-id/ ]]; then
-                    base_drive="$drive_base"
-                else
-                    base_drive="/dev/disk/by-id/$drive_base"
-                fi
-                if [[ ! " ${DRIVES[*]} " =~ " ${base_drive} " ]]; then
-                    DRIVES+=("$base_drive")
-                fi
-            fi
-        done < <(zpool status "$pool" | grep -E '^[[:space:]]+.*-part[0-9]+' | awk '{print $1}')
-    fi
-done
-
-if [[ ${#DRIVES[@]} -eq 0 ]]; then
-    log_warning "No ZFS mirror drives found"
+# Get EFI UUID from fstab
+EFI_UUID=$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", $1); print $1}' /etc/fstab 2>/dev/null || echo "")
+if [[ -z "${EFI_UUID}" ]]; then
+    log_error "Could not find EFI UUID in fstab"
     exit 1
 fi
 
-log_info "Found ${#DRIVES[@]} ZFS mirror drives:"
-for drive in "${DRIVES[@]}"; do
-    log_info "  - $drive"
-done
+# Get currently mounted EFI partition
+MOUNTED_EFI=$(mount | grep '/boot/efi' | awk '{print $1}')
+if [[ -z "${MOUNTED_EFI}" ]]; then
+    log_error "No EFI partition currently mounted at /boot/efi"
+    exit 1
+fi
 
-# Install GRUB to each drive
-for drive in "${DRIVES[@]}"; do
-    log_info "Installing GRUB to $drive..."
-    if grub-install --target=x86_64-efi --efi-directory=/boot/efi "$drive" >/dev/null 2>&1; then
-        log_info "  ✓ GRUB installed successfully to $drive"
-    else
-        log_error "  ✗ Failed to install GRUB to $drive"
+# Find all EFI partitions with this UUID
+mapfile -t EFI_PARTITIONS < <(blkid --output device --match-token UUID="${EFI_UUID}" 2>/dev/null || true)
+if [[ ${#EFI_PARTITIONS[@]} -lt 2 ]]; then
+    log_warning "Only ${#EFI_PARTITIONS[@]} EFI partition(s) found, expected 2+"
+fi
+
+# Build map of EFI partition -> base drive
+declare -A PARTITION_TO_DRIVE
+for efi_part in "${EFI_PARTITIONS[@]}"; do
+    # EFI partition is typically -part1, base drive is without -partN
+    if [[ "$efi_part" =~ ^(.+)-part[0-9]+$ ]]; then
+        base_drive="${BASH_REMATCH[1]}"
+        PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
+    elif [[ "$efi_part" =~ ^(/dev/[^0-9]+)[0-9]+$ ]]; then
+        # Handle /dev/nvme0n1p1 -> /dev/nvme0n1 style
+        base_drive="${BASH_REMATCH[1]}"
+        PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
     fi
 done
 
-log_info "GRUB sync complete"
+log_info "Found ${#EFI_PARTITIONS[@]} EFI partition(s) to sync"
+
+# Process each EFI partition
+INSTALL_COUNT=0
+for efi_part in "${EFI_PARTITIONS[@]}"; do
+    base_drive="${PARTITION_TO_DRIVE[$efi_part]}"
+    if [[ -z "$base_drive" ]]; then
+        log_warning "Could not determine base drive for $efi_part, skipping"
+        continue
+    fi
+
+    DRIVE_ID=$(get_drive_identifier "$base_drive")
+    log_info "Processing $efi_part (Drive: $base_drive, ID: Ubuntu-${DRIVE_ID})"
+
+    # If this is the currently mounted partition, install directly
+    if [[ "$efi_part" == "$MOUNTED_EFI" ]]; then
+        log_info "  Installing to mounted partition..."
+        if grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Ubuntu-${DRIVE_ID}" --recheck --no-floppy "$base_drive" >/dev/null 2>&1; then
+            log_info "  ✓ GRUB installed to mounted partition"
+            ((INSTALL_COUNT++))
+        else
+            log_error "  ✗ Failed to install GRUB to mounted partition"
+        fi
+    else
+        # Mount the other partition temporarily and install there
+        TEMP_MOUNT=$(mktemp -d)
+        log_info "  Mounting $efi_part at $TEMP_MOUNT..."
+
+        if mount "$efi_part" "$TEMP_MOUNT"; then
+            log_info "  Installing to $TEMP_MOUNT..."
+            if grub-install --target=x86_64-efi --efi-directory="$TEMP_MOUNT" --bootloader-id="Ubuntu-${DRIVE_ID}" --recheck --no-floppy "$base_drive" >/dev/null 2>&1; then
+                log_info "  ✓ GRUB installed to $efi_part"
+                ((INSTALL_COUNT++))
+            else
+                log_error "  ✗ Failed to install GRUB to $efi_part"
+            fi
+            umount "$TEMP_MOUNT"
+        else
+            log_error "  ✗ Failed to mount $efi_part"
+        fi
+        rmdir "$TEMP_MOUNT"
+    fi
+done
+
+if [[ ${INSTALL_COUNT} -eq 0 ]]; then
+    log_error "Failed to install GRUB to any drives"
+    exit 1
+fi
+
+log_info "GRUB sync complete (installed to ${INSTALL_COUNT} partition(s))"
 GRUB_SYNC_SCRIPT
 
 chmod +x /mnt/usr/local/bin/sync-grub-to-mirror-drives
 log_info "GRUB sync script created: /usr/local/bin/sync-grub-to-mirror-drives"
 
-# Create unified mirror boot sync script (combines GRUB install + EFI sync)
+# Create unified mirror boot sync script (just runs GRUB sync which handles everything)
 log_info "Creating unified mirror boot sync script..."
 cat << 'MIRROR_BOOT_SYNC' > /mnt/usr/local/bin/sync-mirror-boot
 #!/bin/bash
 # Unified ZFS Mirror Boot Synchronization Script
-# Combines GRUB installation and EFI partition sync for complete mirror redundancy
+# Installs GRUB to all mirror drives with drive-specific EFI folders
 # Runs automatically on kernel/initramfs updates and manual update-grub
 
 set -euo pipefail
 
 log_info() { logger -t "sync-mirror-boot" -p user.info "$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] INFO: $1"; }
 log_error() { logger -t "sync-mirror-boot" -p user.err "$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] ERROR: $1" >&2; }
-log_warning() { logger -t "sync-mirror-boot" -p user.warning "$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] WARNING: $1"; }
 
 log_info "=== ZFS Mirror Boot Sync Starting ==="
 
-# Step 1: Sync GRUB to all mirror drives
+# Sync GRUB to all mirror drives (installs to each drive's EFI partition)
 if [[ -x /usr/local/bin/sync-grub-to-mirror-drives ]]; then
-    log_info "Running GRUB sync to all mirror drives..."
     if /usr/local/bin/sync-grub-to-mirror-drives; then
-        log_info "✓ GRUB sync completed"
+        log_info "=== ZFS Mirror Boot Sync Completed Successfully ==="
+        exit 0
     else
         log_error "GRUB sync failed"
         exit 1
     fi
 else
-    log_warning "GRUB sync script not found, skipping"
+    log_error "GRUB sync script not found at /usr/local/bin/sync-grub-to-mirror-drives"
+    exit 1
 fi
-
-# Step 2: Sync EFI partitions
-if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
-    log_info "Running EFI partition sync..."
-    if /usr/local/bin/sync-efi-partitions; then
-        log_info "✓ EFI sync completed"
-    else
-        log_error "EFI sync failed"
-        exit 1
-    fi
-else
-    log_warning "EFI sync script not found, skipping"
-fi
-
-log_info "=== ZFS Mirror Boot Sync Completed Successfully ==="
-exit 0
 MIRROR_BOOT_SYNC
 
 chmod +x /mnt/usr/local/bin/sync-mirror-boot
