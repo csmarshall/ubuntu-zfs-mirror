@@ -605,7 +605,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.3.2 - Fixed service enablement timing and duplicate cleanup scripts
+- **Script Version**: 6.3.4 - Unified boot sync with comprehensive hooks
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

@@ -1473,12 +1473,7 @@ log_message "EFI sync completed"
 EFI_SYNC_SCRIPT
 
     chmod +x /mnt/usr/local/bin/sync-efi-partitions
-    
-    # Create APT hook
-    echo 'DPkg::Post-Invoke {"/usr/local/bin/sync-efi-partitions || true";};' \
-        > /mnt/etc/apt/apt.conf.d/99-sync-efi
-    
-    log_info "EFI sync script created with APT integration"
+    log_info "EFI sync script created"
     return 0
 }
 
@@ -2251,6 +2246,7 @@ GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --speed=${SERIAL_SPEED:-115200} --unit=${SERIAL_UNIT:-1} --word=8 --parity=no --stop=1"
 GRUB_DISTRIBUTOR="Ubuntu"
+GRUB_DISABLE_OS_PROBER=true
 GRUB_SERIAL_EOF
 else
     KERNEL_CMDLINE="root=ZFS=rpool/root"
@@ -2265,6 +2261,7 @@ GRUB_DISTRIBUTOR="Ubuntu"
 GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_CMDLINE_LINUX="${KERNEL_CMDLINE}"
 GRUB_TERMINAL="console"
+GRUB_DISABLE_OS_PROBER=true
 GRUB_LOCAL_EOF
 fi
 
@@ -2538,6 +2535,90 @@ GRUB_SYNC_SCRIPT
 
 chmod +x /mnt/usr/local/bin/sync-grub-to-mirror-drives
 log_info "GRUB sync script created: /usr/local/bin/sync-grub-to-mirror-drives"
+
+# Create unified mirror boot sync script (combines GRUB install + EFI sync)
+log_info "Creating unified mirror boot sync script..."
+cat << 'MIRROR_BOOT_SYNC' > /mnt/usr/local/bin/sync-mirror-boot
+#!/bin/bash
+# Unified ZFS Mirror Boot Synchronization Script
+# Combines GRUB installation and EFI partition sync for complete mirror redundancy
+# Runs automatically on kernel/initramfs updates and manual update-grub
+
+set -euo pipefail
+
+log_info() { logger -t "sync-mirror-boot" -p user.info "$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] INFO: $1"; }
+log_error() { logger -t "sync-mirror-boot" -p user.err "$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] ERROR: $1" >&2; }
+log_warning() { logger -t "sync-mirror-boot" -p user.warning "$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] WARNING: $1"; }
+
+log_info "=== ZFS Mirror Boot Sync Starting ==="
+
+# Step 1: Sync GRUB to all mirror drives
+if [[ -x /usr/local/bin/sync-grub-to-mirror-drives ]]; then
+    log_info "Running GRUB sync to all mirror drives..."
+    if /usr/local/bin/sync-grub-to-mirror-drives; then
+        log_info "✓ GRUB sync completed"
+    else
+        log_error "GRUB sync failed"
+        exit 1
+    fi
+else
+    log_warning "GRUB sync script not found, skipping"
+fi
+
+# Step 2: Sync EFI partitions
+if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
+    log_info "Running EFI partition sync..."
+    if /usr/local/bin/sync-efi-partitions; then
+        log_info "✓ EFI sync completed"
+    else
+        log_error "EFI sync failed"
+        exit 1
+    fi
+else
+    log_warning "EFI sync script not found, skipping"
+fi
+
+log_info "=== ZFS Mirror Boot Sync Completed Successfully ==="
+exit 0
+MIRROR_BOOT_SYNC
+
+chmod +x /mnt/usr/local/bin/sync-mirror-boot
+log_info "Unified mirror boot sync script created: /usr/local/bin/sync-mirror-boot"
+
+# Create /etc/grub.d hook for automatic sync on update-grub
+log_info "Creating /etc/grub.d/99-zfs-mirror-sync hook..."
+cat << 'GRUB_D_HOOK' > /mnt/etc/grub.d/99-zfs-mirror-sync
+#!/bin/sh
+# ZFS Mirror Boot Sync Hook for update-grub
+# Automatically syncs GRUB and EFI partitions when update-grub runs
+# This ensures all mirror drives stay in sync even on manual updates
+
+# Only run if the unified sync script exists
+if [ -x /usr/local/bin/sync-mirror-boot ]; then
+    # Run sync in background to avoid blocking update-grub
+    # Output nothing to avoid polluting grub.cfg
+    /usr/local/bin/sync-mirror-boot >/dev/null 2>&1 &
+fi
+
+# Exit cleanly with no output (won't affect grub.cfg generation)
+exit 0
+GRUB_D_HOOK
+
+chmod +x /mnt/etc/grub.d/99-zfs-mirror-sync
+log_info "GRUB hook created: /etc/grub.d/99-zfs-mirror-sync"
+
+# Create kernel/initramfs hooks (symlinks to unified script)
+log_info "Creating kernel and initramfs hooks..."
+ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/kernel/postinst.d/zz-sync-mirror-boot
+ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/kernel/postrm.d/zz-sync-mirror-boot
+ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/initramfs/post-update.d/zz-sync-mirror-boot
+log_info "Kernel/initramfs hooks created (symlinked to /usr/local/bin/sync-mirror-boot)"
+
+# Remove old APT hook (replaced by grub.d and kernel hooks)
+if [[ -f /mnt/etc/apt/apt.conf.d/99-sync-efi ]]; then
+    rm -f /mnt/etc/apt/apt.conf.d/99-sync-efi
+    log_info "Removed old APT hook (replaced by grub.d and kernel hooks)"
+fi
 
 # Document manual cleanup commands in recovery guide (no separate script needed)
 
@@ -3210,7 +3291,27 @@ CLEANUP_SCRIPT_EOF
 
 chmod +x /mnt/usr/local/bin/zfs-firstboot-cleanup
 
-# Service will be created and enabled later with optimal early-boot configuration
+# Create early-boot systemd service for immediate cleanup and reboot
+# IMPORTANT: Must be created BEFORE running update-grub so GRUB script can detect it
+cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'EOF'
+[Unit]
+Description=ZFS first-boot cleanup - remove force import configuration and reboot
+After=zfs-mount.service local-fs.target
+Before=multi-user.target graphical.target systemd-user-sessions.service
+# Service runs if enabled, auto-disables after successful cleanup
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/zfs-firstboot-cleanup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target
+EOF
+
+# Enable cleanup service NOW so GRUB script can detect it during update-grub
+chroot /mnt systemctl enable zfs-firstboot-cleanup.service
 
 log_info "✓ First-boot force import configured"
 log_info "✓ Automatic cleanup will remove configuration after successful boot"
@@ -3263,30 +3364,7 @@ log_info "Installing GRUB to all ZFS mirror drives for redundancy..."
 chroot /mnt /usr/local/bin/sync-grub-to-mirror-drives
 log_info "✓ GRUB updated and installed on all ZFS mirror drives with first-boot configuration"
 
-# The comprehensive cleanup script was already created above with validation and reboot
-
-# Create early-boot systemd service for immediate cleanup and reboot
-cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'EOF'
-[Unit]
-Description=ZFS first-boot cleanup - remove force import configuration and reboot
-After=zfs-mount.service local-fs.target
-Before=multi-user.target graphical.target systemd-user-sessions.service
-# Service runs if enabled, auto-disables after successful cleanup
-DefaultDependencies=no
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/zfs-firstboot-cleanup
-RemainAfterExit=yes
-
-[Install]
-WantedBy=sysinit.target
-EOF
-
-# Enable cleanup service
-chroot /mnt systemctl enable zfs-firstboot-cleanup.service
-
-# Force import cleanup service has been configured above
+# The comprehensive cleanup script and service were already created and enabled above
 log_info "✓ First boot configured with force import and automatic cleanup"
 log_info "✓ Pool will import reliably with zfs_force=1 parameter"
 log_info "✓ Cleanup service will remove force import after successful first boot"

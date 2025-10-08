@@ -1,6 +1,60 @@
 # ZFS Mirror Setup Script - Change History
 
-## v6.3.2 - Fixed service enablement timing validation (2025-10-08)
+## v6.3.4 - Unified boot sync with comprehensive hooks (2025-10-08)
+
+**Major Improvement - Complete Mirror Synchronization**
+
+Replaced fragmented sync mechanisms with a unified, comprehensive boot synchronization system that ensures all mirror drives stay in perfect sync regardless of how updates are performed.
+
+**Changes:**
+- **Disabled os-prober** (`GRUB_DISABLE_OS_PROBER=true`) - eliminates slow scanning, faster updates
+- **Created unified sync script** `/usr/local/bin/sync-mirror-boot` - combines GRUB install + EFI sync
+- **Added grub.d hook** `/etc/grub.d/99-zfs-mirror-sync` - runs on manual `update-grub`
+- **Added kernel hooks** - symlinks in `/etc/kernel/postinst.d/` and `/etc/kernel/postrm.d/`
+- **Added initramfs hook** - symlink in `/etc/initramfs/post-update.d/`
+- **Removed APT hook** - replaced by more targeted kernel/grub hooks
+
+**Coverage:**
+- ✅ Kernel updates → kernel hooks trigger sync
+- ✅ Initramfs updates → initramfs hook triggers sync
+- ✅ Manual `update-grub` → grub.d hook triggers sync
+- ✅ GRUB package updates → kernel hooks catch it
+
+**User Impact:** All mirror drives automatically stay in sync. Fast updates (no os-prober). No manual intervention needed.
+
+----
+
+## v6.3.3 - Fixed service creation order (2025-10-08)
+
+**Critical Bug Fix - Service Creation Before GRUB Generation**
+
+Fixed installation failure where `update-grub` would run before the cleanup service was created, causing the GRUB force import script to exit early without generating the required menuentry.
+
+**Root Cause:**
+- GRUB script creation at line 2946
+- `update-grub` execution at line 3222
+- Service creation at line 3269 (AFTER update-grub!)
+- GRUB script checked for service existence → not found → exited early → no menuentry generated
+
+**Solution:**
+- Moved service creation and enablement to lines 3213-3233 (BEFORE update-grub)
+- Removed duplicate service creation that occurred after update-grub
+- Added clear comments explaining the ordering requirement
+
+**Execution Order (Fixed):**
+1. Create GRUB force import script
+2. Create cleanup script
+3. **Create and enable cleanup service** ✓
+4. Run update-grub (now sees enabled service) ✓
+5. Validate configuration
+
+**User Impact:** Installation now completes successfully. The `zfs_force=1` parameter correctly appears in grub.cfg and all validation tests pass.
+
+**Test Script:** Added `test_grub_force_import.sh` for validating the GRUB force import configuration in debug environments.
+
+----
+
+## v6.3.2 - Smart EFI naming and service timing improvements (2025-10-08)
 
 **Critical Bug Fix - Resolved Installation Validation Failure**
 
