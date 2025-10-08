@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.0.5 - Fix TIMEZONE unbound variable error in chroot configuration
+# Version: 6.1.0 - MAJOR: Clean architecture - pure force import approach
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.0.5"
+readonly VERSION="6.1.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -1350,7 +1350,7 @@ setup_zfs_config() {
 ZFS_DEFAULTS_EOF
 
     log_info "ZFS configuration created"
-    log_info "Clean hostid synchronization will be configured next"
+    log_info "Force import configuration will be set up for first boot"
     return 0
 }
 
@@ -1460,8 +1460,7 @@ EFI_SYNC_SCRIPT
 }
 
 # Create single ZFS pool with GRUB2 compatibility and SSD optimization
-# NOTE: v5.x used dual-pool design (bpool + rpool) but had systemd import issues
-# v6.0.0 uses single pool with GRUB2 compatibility to eliminate Ubuntu 24.04 bugs
+# Single pool design eliminates dual-pool complexity and Ubuntu 24.04 systemd issues
 create_zfs_pool() {
     local part1_root="$1"
     local part2_root="$2"
@@ -1940,7 +1939,7 @@ perform_basic_zfs_cleanup "rpool" "${PART1_ROOT}" "${PART2_ROOT}"
 # Create ZFS pool
 log_header "Creating ZFS Pool"
 INSTALL_STATE="pools_creating_datasets"
-log_info "Creating mirrored ZFS root pool (hostid will be synchronized at end of installation)"
+log_info "Creating mirrored ZFS root pool (force import will be configured for first boot)"
 
 # Create single ZFS pool with GRUB2 compatibility
 if ! create_zfs_pool "${PART1_ROOT}" "${PART2_ROOT}" "${ASHIFT}" "${TRIM_ENABLED}"; then
@@ -2081,20 +2080,7 @@ exec 2>&1
 
 log_info "Starting chroot system configuration"
 
-# Validate required environment variables
-required_vars=("DISK1" "DISK2" "EFI_VOLUME_ID" "ADMIN_USER" "ADMIN_PASS" "TIMEZONE")
-missing_vars=()
-
-for var in "${required_vars[@]}"; do
-    if [[ -z "${!var:-}" ]]; then
-        missing_vars+=("${var}")
-    fi
-done
-
-if [[ ${#missing_vars[@]} -gt 0 ]]; then
-    log_error "Missing required environment variables: ${missing_vars[*]}"
-    exit 1
-fi
+# Environment variables validated by validate_chroot_environment() before chroot execution
 
 # Update packages
 apt-get update
@@ -2224,7 +2210,7 @@ SYSCTL_EOF
 fi
 
 # ZFS configuration will be set up after installation completes
-log_info "ZFS configuration will be created with proper hostid after installation"
+log_info "Force import configuration will be set up after installation"
 
 # Configure GRUB with console and AppArmor settings
 if [[ "${USE_SERIAL_CONSOLE:-false}" == "true" ]]; then
@@ -2866,7 +2852,7 @@ Test system:             sudo /usr/local/bin/test-zfs-mirror
 Sync EFI partitions:     sudo /usr/local/bin/sync-efi-partitions
 Sync GRUB to all drives: sudo /usr/local/bin/sync-grub-to-mirror-drives
 Replace failed drive:    sudo /usr/local/bin/replace-drive-in-zfs-boot-mirror /dev/disk/by-id/NEW-DRIVE
-Manual cleanup (if needed): sudo rm -f /.zfs-force-import-firstboot /etc/grub.d/99_zfs_firstboot && sudo update-grub
+Manual cleanup (if needed): sudo systemctl disable zfs-firstboot-cleanup.service && sudo rm -f /etc/grub.d/99_zfs_firstboot && sudo update-grub
 Check boot entries:      efibootmgr
 
 Force import (emergency): sudo zpool import -f rpool
@@ -2918,8 +2904,7 @@ fi
 # ================================================================
 # FIRST-BOOT FORCE IMPORT CONFIGURATION
 # ================================================================
-# Instead of trying to synchronize hostids (which is complex and error-prone),
-# we configure the first boot to use 'zfs_force=1' kernel parameter.
+# Configure first boot to use 'zfs_force=1' kernel parameter for reliable import.
 # This tells the ZFS initramfs to use 'zpool import -f' for reliable import.
 # After successful first boot, the system automatically removes this configuration
 # and future boots use clean imports without force flags.
@@ -2935,81 +2920,7 @@ grep "^menuentry " /mnt/boot/grub/grub.cfg.post-initial-install | sed "s/^/  /" 
     log_info "$line"
 done
 
-log_info "Configuring clean hostid synchronization for reliable pool import..."
-log_info "This ensures the pool imports cleanly on first boot without force flags"
 INSTALL_STATE="configuring_first_boot"
-
-# GRUB configuration is standard - no special first-boot setup needed
-# NOTE: v5.x required complex first-boot GRUB entries with zfs_force=1 cleanup
-log_info "Standard GRUB configuration sufficient with clean hostid approach..."
-
-# Implement Option 1: Clean hostid synchronization for reliable first boot
-# NOTE: v5.x used complex force import with cleanup services (commits 6068d7e-f4f6f2b)
-# v6.0.0 uses clean hostid sync to eliminate dual-boot complexity entirely
-log_info "Configuring clean hostid synchronization for reliable ZFS imports..."
-
-# Generate hostid early and synchronize it properly
-# NOTE: ZFS hostid must handle endianness correctly for reliable imports
-log_info "Generating hostid with proper endianness handling..."
-
-# Generate raw 4-byte hostid
-HOSTID_RAW=$(head -c4 /dev/urandom)
-
-# Convert to hexadecimal with proper byte order (big-endian for consistency)
-HOSTID_HEX=$(echo -n "${HOSTID_RAW}" | od -A none -t x1 | tr -d ' ')
-log_info "Generated hostid: 0x${HOSTID_HEX}"
-
-# Write raw bytes to hostid file (this is what ZFS actually reads)
-echo -n "${HOSTID_RAW}" > /mnt/etc/hostid
-
-# Validate the file was written correctly
-if [[ ! -f /mnt/etc/hostid ]] || [[ $(stat -c%s /mnt/etc/hostid) -ne 4 ]]; then
-    log_error "CRITICAL: Failed to write hostid file correctly"
-    exit 1
-fi
-
-log_info "Hostid file written with correct binary format"
-
-# Update the pool with the correct hostid (ensures clean import)
-zpool set comment="hostid:0x${HOSTID_HEX}" rpool
-
-# Validate hostid synchronization to prevent broken system
-log_info "Validating hostid synchronization with endianness checks..."
-
-# Check target system hostid file (binary format)
-if [[ ! -f /mnt/etc/hostid ]]; then
-    log_error "CRITICAL: Hostid file /mnt/etc/hostid does not exist"
-    exit 1
-fi
-
-# Read hostid as binary and convert to hex for comparison
-TARGET_HOSTID_HEX=$(od -A none -t x1 /mnt/etc/hostid | tr -d ' ')
-if [[ -z "${TARGET_HOSTID_HEX}" ]]; then
-    log_error "CRITICAL: Failed to read hostid from target system /mnt/etc/hostid"
-    exit 1
-fi
-
-# Check pool hostid (stored in comment for validation)
-POOL_HOSTID_HEX=$(zpool get -H -o value comment rpool | sed 's/hostid:0x//')
-if [[ -z "${POOL_HOSTID_HEX}" ]]; then
-    log_error "CRITICAL: Failed to read hostid from pool comment"
-    exit 1
-fi
-
-# Validate they match (case-insensitive comparison)
-if [[ "${TARGET_HOSTID_HEX,,}" == "${POOL_HOSTID_HEX,,}" ]]; then
-    log_info "✓ Hostid validation successful: 0x${TARGET_HOSTID_HEX} matches pool hostid"
-    log_info "✓ Binary format and endianness verified correct"
-    log_info "✓ Pool will import cleanly on first boot without force flags"
-else
-    log_error "CRITICAL: Hostid mismatch detected!"
-    log_error "  Target system: 0x${TARGET_HOSTID_HEX}"
-    log_error "  Pool hostid:   0x${POOL_HOSTID_HEX}"
-    log_error "This indicates endianness or format issues. Aborting installation."
-    exit 1
-fi
-
-log_info "Hostid synchronized - configuring reliable first boot with force import"
 
 # Configure simplified force import for reliable first boot
 log_info "Configuring first-boot force import for reliable ZFS pool access..."
@@ -3022,8 +2933,8 @@ cat > /mnt/etc/grub.d/99_zfs_firstboot << 'GRUB_SCRIPT_EOF'
 #!/bin/sh
 set -e
 
-# Check if cleanup service file exists (indicates first boot setup)
-if [ -f /etc/systemd/system/zfs-firstboot-cleanup.service ]; then
+# Check if cleanup service is enabled (indicates first boot setup needed)
+if systemctl is-enabled zfs-firstboot-cleanup.service >/dev/null 2>&1; then
 
     # Source GRUB configuration to get existing parameters
     . /etc/default/grub
@@ -3074,7 +2985,7 @@ if [ -f /etc/systemd/system/zfs-firstboot-cleanup.service ]; then
     CMDLINE="$CMDLINE zfs_force=1"
 
     cat << EOF
-menuentry 'Ubuntu (ZFS Force Import - First Boot)' --class ubuntu --class gnu-linux --class gnu --class os {
+menuentry 'Ubuntu (ZFS Force Import - First Boot)' --class ubuntu --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-zfs-firstboot' {
 	recordfail
 	load_video
 	gfxmode \${linux_gfx_mode}
@@ -3192,105 +3103,43 @@ CLEANUP_SCRIPT_EOF
 
 chmod +x /mnt/usr/local/bin/zfs-firstboot-cleanup
 
-# Create systemd service for cleanup
-cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'SERVICE_EOF'
-[Unit]
-Description=ZFS first-boot cleanup service with validation and reboot
-After=zfs-mount.service local-fs.target
-Before=multi-user.target network.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/zfs-firstboot-cleanup
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-SERVICE_EOF
-
-# Enable cleanup service
-chroot /mnt systemctl enable zfs-firstboot-cleanup.service
-
-# Update GRUB with force import for first boot
-chroot /mnt update-grub
+# Service will be created and enabled later with optimal early-boot configuration
 
 log_info "✓ First-boot force import configured"
 log_info "✓ Automatic cleanup will remove configuration after successful boot"
 
 show_progress 10 10 "Installation complete!"
 
-# Final summary of the clean hostid approach
-log_info "📋 Summary: Hostid synchronized between system and ZFS pool"
-log_info "🔄 First boot will import pool cleanly without any special configuration"
+# Final summary of the force import approach
+log_info "📋 Summary: First-boot force import configured for reliable pool access"
+log_info "🔄 First boot will use zfs_force=1 then auto-cleanup for clean subsequent boots"
 
-# Mark installation as completed
-INSTALL_STATE="completed"
 # ZFS First-Boot Force Import Configuration
 # Creates a well-formed Ubuntu entry with zfs_force=1 using installation variables
 # After first successful boot, this script and configuration are automatically removed
 
-if [ -f /.zfs-force-import-firstboot ]; then
-    # Build kernel command line using same logic as main GRUB config
-    KERNEL_CMDLINE="zfs_force=1"
-
-    # Add serial console (hardcoded based on installation settings)
-    KERNEL_CMDLINE="$KERNEL_CMDLINE console=tty1 console=ttyS1,115200"
-
-    # Add AppArmor setting (hardcoded based on installation settings)
-    KERNEL_CMDLINE="$KERNEL_CMDLINE apparmor=0"
-
-    # Add root filesystem
-    KERNEL_CMDLINE="$KERNEL_CMDLINE root=ZFS=\"rpool/root\" ro"
-
-    # Extract search command from working GRUB config to get proper UUID
-    SEARCH_CMD=$(grep "search --no-floppy --fs-uuid --set=root" /boot/grub/grub.cfg.post-initial-install | head -1 | sed 's/^[[:space:]]*//')
-
-    # Generate GRUB entry with quoted heredoc to preserve GRUB variables
-    cat << 'GRUB_ENTRY_EOF'
-# ZFS first-boot force import menu entry (auto-generated, auto-removed)
-menuentry 'Ubuntu 24.04 LTS - First boot force zfs import' --class ubuntu --class gnu-linux --class gnu --class os ${menuentry_id_option} 'gnulinux-zfs-firstboot' {
-    recordfail
-    load_video
-    gfxmode ${linux_gfx_mode}
-    insmod gzio
-    if [ x${grub_platform} = xxen ]; then insmod xzio; insmod lzopio; fi
-    insmod part_gpt
-    insmod zfs
-GRUB_ENTRY_EOF
-    # Insert the extracted search command with proper UUID
-    echo "    $SEARCH_CMD"
-    cat << 'GRUB_ENTRY_EOF'
-
-    # Find latest kernel dynamically at boot time using GRUB-compatible syntax
-    for kernel in /boot/@/vmlinuz-*; do
-        if [ -f "${kernel}" ]; then
-            # Use GRUB regexp to extract version from kernel path
-            if regexp --set=kernelversion '^/boot/@/vmlinuz-(.*)' "${kernel}"; then
-GRUB_ENTRY_EOF
-    # Insert the expanded kernel command line
-    echo "                linux \"/boot/@/vmlinuz-\${kernelversion}\" $KERNEL_CMDLINE"
-    echo "                initrd \"/boot/@/initrd.img-\${kernelversion}\""
-    cat << 'GRUB_ENTRY_EOF'
-                break
-            fi
-        fi
-    done
-}
-GRUB_ENTRY_EOF
-else
-    # Log warning if this script is running but force import is not needed
-    echo "Warning: /etc/grub.d/99_zfs_firstboot running but /.zfs-force-import-firstboot not found" >&2
-    echo "This script should have been automatically removed after first boot" >&2
-fi
+# This script generates the force import GRUB entry during first boot only
+# It gets automatically removed after first successful boot
 
 chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 
 
-# Now add the first-boot entry and regenerate
-log_info "Adding first-boot entry and setting as default..."
-if set_grub_default "/mnt/etc/default/grub" "gnulinux-zfs-firstboot"; then
-    log_info "Regenerating GRUB configuration with first-boot entry as default..."
+# Generate GRUB configuration and set force import entry as default
+log_info "Configuring GRUB with force import entry as default..."
+
+# First, generate GRUB to get menuentry count
+chroot /mnt update-grub
+
+# Count menu entries to find the force import entry position (it will be last)
+TOTAL_ENTRIES=$(chroot /mnt grep -c "^menuentry " /boot/grub/grub.cfg)
+FORCE_IMPORT_INDEX=$((TOTAL_ENTRIES - 1))  # Last entry, 0-indexed
+
+log_info "Force import entry found at position ${FORCE_IMPORT_INDEX} (total entries: ${TOTAL_ENTRIES})"
+
+# Set numeric default and update GRUB configuration
+if set_grub_default "/mnt/etc/default/grub" "${FORCE_IMPORT_INDEX}"; then
     chroot /mnt update-grub
+    log_info "✓ Force import entry set as default boot option"
 else
     log_error "Failed to set GRUB default to force import entry"
     exit 1
@@ -3328,16 +3177,7 @@ fi
 
 log_info "Removing first-boot force import configuration..."
 
-# Remove force import marker
-if [[ -f /.zfs-force-import-firstboot ]]; then
-    if rm -f /.zfs-force-import-firstboot; then
-        log_info "Removed force import marker: /.zfs-force-import-firstboot"
-    else
-        log_error "Failed to remove force import marker: /.zfs-force-import-firstboot"
-    fi
-else
-    log_info "Force import marker not found (already removed)"
-fi
+# Force import marker file not needed - service state determines behavior
 
 # Remove ZFS import force option from /etc/default/zfs
 if [[ -f /etc/default/zfs ]] && grep -q 'ZPOOL_IMPORT_OPTS="-f"' /etc/default/zfs; then
@@ -3456,7 +3296,7 @@ cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'EOF'
 Description=ZFS first-boot cleanup - remove force import configuration and reboot
 After=zfs-mount.service local-fs.target
 Before=multi-user.target graphical.target systemd-user-sessions.service
-ConditionPathExists=/.zfs-force-import-firstboot
+# Service runs if enabled, auto-disables after successful cleanup
 DefaultDependencies=no
 
 [Service]
@@ -3468,12 +3308,13 @@ RemainAfterExit=yes
 WantedBy=sysinit.target
 EOF
 
-# No cleanup service needed with clean hostid synchronization
-log_info "Skipping cleanup service creation - clean first boot expected with hostid sync"
+# Enable cleanup service
+chroot /mnt systemctl enable zfs-firstboot-cleanup.service
 
-log_info "✓ First boot configured with clean hostid synchronization"
-log_info "✓ Pool will import cleanly without force flags"
-log_info "✓ No cleanup services needed - system ready for normal operation"
+# Force import cleanup service has been configured above
+log_info "✓ First boot configured with force import and automatic cleanup"
+log_info "✓ Pool will import reliably with zfs_force=1 parameter"
+log_info "✓ Cleanup service will remove force import after successful first boot"
 
 # ================================================================
 # MANUAL RECOVERY INSTRUCTIONS
@@ -3497,9 +3338,9 @@ echo ""
 
 show_progress 10 10 "Installation complete!"
 
-# Final summary of the clean hostid approach
-log_info "📋 Summary: Hostid synchronized between system and ZFS pool"
-log_info "🔄 First boot will import pool cleanly without any special configuration"
+# Final summary of the force import approach
+log_info "📋 Summary: First-boot force import configured for reliable pool access"
+log_info "🔄 First boot will use zfs_force=1 then auto-cleanup for clean subsequent boots"
 
 # Mark installation as completed
 INSTALL_STATE="completed"
@@ -3576,7 +3417,7 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     echo ""
     echo -e "${YELLOW}${BOLD}First Boot:${NC}"
     echo -e "  • Force import flag will be automatically removed"
-    echo -e "  • Manual cleanup (if needed): ${GREEN}sudo rm -f /.zfs-force-import-firstboot /etc/grub.d/99_zfs_firstboot && sudo update-grub${NC}"
+    echo -e "  • Manual cleanup (if needed): ${GREEN}sudo systemctl disable zfs-firstboot-cleanup.service && sudo rm -f /etc/grub.d/99_zfs_firstboot && sudo update-grub${NC}"
     echo ""
     echo -e "${YELLOW}${BOLD}Post-Install Recommendations:${NC}"
     echo -e "${GREEN}1. Test the installation:${NC}"

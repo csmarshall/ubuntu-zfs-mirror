@@ -1,5 +1,35 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.1.0 - Clean single-approach force import architecture (2025-10-08)
+
+**Major Architecture Cleanup - Eliminated Conflicting Approaches**
+
+Removed 159 lines of conflicting code that was simultaneously implementing both hostid synchronization AND force import approaches, creating a "frankenstein" architecture.
+
+**Issues Resolved:**
+- **Conflicting Dual Architecture**: Script was doing BOTH hostid sync AND force import approaches simultaneously
+- **Redundant Service Creation**: Same systemd service created twice with different configurations
+- **Unnecessary Complexity**: Removed entire hostid synchronization block (75+ lines) that conflicted with force import
+- **Marker File Logic**: Eliminated redundant `.zfs-force-import-firstboot` checking when systemd service state already provides this info
+
+**Code Cleanup:**
+- **Removed Hostid Synchronization** (Lines ~2650-2725): Eliminated entire conflicting approach per user choice
+- **Consolidated Service Creation** (Lines ~2595-2615): Removed inferior multi-user.target service, kept sysinit.target version
+- **Removed Redundant Validation** (Lines throughout): Eliminated duplicate hostid checks and validation
+- **Streamlined Logic**: Single-purpose force import approach with automatic cleanup
+
+**Technical Benefits:**
+- ✅ **Clean Architecture**: Single approach eliminates contradictions
+- ✅ **Maintainable Code**: No more conflicting logic paths
+- ✅ **Reliable Operation**: Force import with proper systemd integration
+- ✅ **Simplified Debugging**: Clear single-purpose design
+
+**User Impact:** Installation now follows clean, single-approach architecture without conflicting mechanisms trying to solve the same problem in different ways.
+
+**Changes:** +45, -204 lines (net: -159 lines)
+
+----
+
 ## v6.0.5 - Fix TIMEZONE unbound variable error in chroot configuration (2025-10-08)
 
 **Critical Fix for Installation Failure**

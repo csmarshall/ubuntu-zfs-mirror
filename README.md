@@ -33,7 +33,7 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 
 ## First Boot Behavior
 
-With the **v6.0.0 single-pool architecture**, first boot uses a simplified force import mechanism for maximum reliability.
+With the **v6.1.0 single-pool architecture**, first boot uses a clean force import mechanism for maximum reliability.
 
 ### Automatic First Boot Process
 1. **UEFI Firmware**: Loads GRUB from the EFI System Partition
@@ -304,7 +304,7 @@ flowchart LR
 - **Self-Cleaning**: Systemd service automatically removes force configuration after successful boot
 - **Fail-Safe Design**: If auto-cleanup fails, system continues to boot normally
 - **Manual Recovery**: Clear instructions provided for edge cases requiring manual intervention
-- **No Complex Synchronization**: Eliminates hostid manipulation, byte order issues, and timing dependencies
+- **No Complex Synchronization**: Eliminates timing dependencies and import conflicts
 
 **Technical Implementation Details:**
 - **ZFS Force Detection**: Ubuntu's initramfs supports multiple kernel parameter formats: `(zfs_force|zfs.force|zfsforce)=(on|yes|1)` - see [Ubuntu initramfs-tools ZFS documentation](https://manpages.ubuntu.com/manpages/noble/man8/zfs-initramfs.8.html)
@@ -323,9 +323,8 @@ zpool status
 # Verify both pools imported
 zpool list
 
-# Check hostid alignment
-hostid
-sudo zdb -l /dev/disk/by-id/your-drive-part4 | grep hostid
+# Check pool import status
+zpool status rpool
 ```
 
 ### Maintenance Commands
@@ -487,7 +486,7 @@ This installation script adheres to and exceeds official OpenZFS and Ubuntu ZFS 
 ### 🚀 **Advanced Features Beyond Standards**
 
 **Production Enhancements:**
-- **First-Boot Reliability**: Innovative `zfs_force=1` approach eliminates complex hostid synchronization
+- **First-Boot Reliability**: Innovative `zfs_force=1` approach eliminates import timing issues
 - **Auto-Recovery**: Self-healing cleanup systems with comprehensive logging
 - **Drive Replacement**: GUID-based automation handles edge cases missed by basic implementations
 - **Redundancy**: EFI partition sync and GRUB installation across all mirror drives
@@ -503,7 +502,7 @@ This installation script adheres to and exceeds official OpenZFS and Ubuntu ZFS 
 
 | **Component** | **Our Choice** | **Standard** | **Advantage** |
 |---------------|----------------|--------------|---------------|
-| First Boot | `zfs_force=1` + auto-cleanup | Hostid sync | Eliminates timing issues and complexity |
+| First Boot | `zfs_force=1` + auto-cleanup | Manual import | Eliminates timing issues and complexity |
 | Pool Import | `cachefile=none` only | Mixed cache/scan | Avoids Ubuntu cache file corruption (LP#1718761) |
 | Drive Replacement | GUID-based detection | Manual path lookup | Handles failed device paths automatically |
 | Boot Redundancy | EFI sync + multi-GRUB | Single EFI setup | True redundancy across all components |
@@ -575,7 +574,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.0.5 - Fix TIMEZONE unbound variable error in chroot configuration
+- **Script Version**: 6.1.0 - Clean single-approach force import architecture
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
@@ -612,7 +611,7 @@ MIT License - See original repository for details.
 #### **Current Architecture (v6.0.0+): Single ZFS Pool**
 - **3 Partitions**: EFI (1GB) + Swap (8GB default) + ZFS Root (remaining)
 - **Single Pool**: `rpool` with GRUB2 compatibility features
-- **Clean First Boot**: Proper hostid synchronization eliminates force import
+- **Clean First Boot**: Reliable force import mechanism with automatic cleanup
 - **Ubuntu 24.04 Compatible**: Avoids systemd assertion failures
 
 #### **Legacy Architecture (v5.x): Dual ZFS Pool**
@@ -622,14 +621,14 @@ Prior to commit `6068d7e`, this script used a dual-pool design based on the offi
 - **Ubuntu 24.04 Issue**: Systemd assertion failures prevented `bpool` import
 - **Commit `6068d7e`**: Fixed mount conflicts but didn't solve underlying systemd bug
 
-#### **Fallback Strategy: Single Pool Force Import**
-If clean hostid synchronization fails in testing, the script can fall back to a simplified force import approach:
+#### **Current Implementation: Single Pool Force Import**
+The script uses a proven force import approach for reliable first-boot:
 - **Single force import**: Only `rpool` needs `zfs_force=1` (no dual-pool complexity)
-- **Simple cleanup**: Remove first-boot GRUB entry, regenerate config, reboot
+- **Automatic cleanup**: Remove first-boot GRUB entry, regenerate config, reboot
 - **No systemd bugs**: Eliminates assertion failures by avoiding separate boot pool
-- **50% less complexity**: One pool import vs. coordinating two pools
+- **Streamlined design**: One pool import with comprehensive validation
 
-This fallback would still be significantly more reliable than the original dual-pool approach while maintaining the benefits of ZFS root mirroring.
+This implementation provides maximum reliability while maintaining the benefits of ZFS root mirroring.
 
 ---
 
