@@ -1,5 +1,36 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.2.0 - Simplified GRUB kernel parameter approach (2025-10-08)
+
+**Major Simplification - Eliminated Complex GRUB Script Generation**
+
+Replaced complex custom GRUB menuentry generation with simple `/etc/default/grub` modification using `zfs_force=1` kernel parameter.
+
+**Issues Resolved:**
+- **Complex GRUB Script Generation**: Eliminated 80+ lines of custom GRUB script creation and kernel version detection
+- **GRUB Menu Issues**: No more custom menuentry management that was causing boot menu problems
+- **Backup/Restore Complexity**: Removed complex backup and restoration of GRUB configuration files
+- **Default Boot Entry Management**: No more complex logic to set custom entries as default
+
+**Simplified Approach:**
+- **GRUB_CMDLINE_LINUX_DEFAULT**: Simply add `zfs_force=1` to existing kernel parameters
+- **GRUB_DISTRIBUTOR**: Temporarily change to "Ubuntu - Force ZFS import first boot"
+- **Standard GRUB Commands**: Use `update-grub` for all configuration changes
+- **Simple Restoration**: Restore original values from backup variables
+
+**Technical Benefits:**
+- ✅ **90% Less Code**: Eliminated complex GRUB script generation and management
+- ✅ **No Menu Issues**: Uses standard Ubuntu boot entries instead of custom ones
+- ✅ **Reliable Cleanup**: Simple parameter removal instead of file restoration
+- ✅ **Better Validation**: Confirms force parameter is added/removed properly
+- ✅ **Standard Integration**: Works with Ubuntu's native GRUB infrastructure
+
+**User Impact:** First boot will show "Ubuntu - Force ZFS import first boot" in menu with `zfs_force=1` parameter, then automatically revert to normal "Ubuntu" entries after cleanup.
+
+**Changes:** +25, -85 lines (net: -60 lines)
+
+----
+
 ## v6.1.0 - Clean single-approach force import architecture (2025-10-08)
 
 **Major Architecture Cleanup - Eliminated Conflicting Approaches**

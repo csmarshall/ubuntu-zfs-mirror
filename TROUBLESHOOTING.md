@@ -157,6 +157,7 @@ Disk 1 & 2 (mirrored):
 ## Development Notes
 
 ### Recent Changes
+- **2025-10-08:** v6.2.0 - **MAJOR**: Simplified GRUB kernel parameter approach
 - **2025-10-08:** v6.1.0 - **MAJOR**: Clean single-approach force import architecture
 - **2025-10-07:** v6.0.1 - Cleanup dual-pool references and undefined variables
 - **2025-10-07:** v6.0.0 - **MAJOR**: Single-pool architecture refactor for Ubuntu 24.04 compatibility
@@ -209,7 +210,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **6.1.0** (as of 2025-10-08)
+- Current version: **6.2.0** (as of 2025-10-08)
 
 **⚠️ CRITICAL: Version Synchronization Required**
 When updating version numbers, you **MUST** update ALL of these locations:

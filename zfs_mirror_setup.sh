@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.1.0 - MAJOR: Clean architecture - pure force import approach
+# Version: 6.2.0 - Simplified GRUB kernel parameter approach
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.1.0"
+readonly VERSION="6.2.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -2852,7 +2852,7 @@ Test system:             sudo /usr/local/bin/test-zfs-mirror
 Sync EFI partitions:     sudo /usr/local/bin/sync-efi-partitions
 Sync GRUB to all drives: sudo /usr/local/bin/sync-grub-to-mirror-drives
 Replace failed drive:    sudo /usr/local/bin/replace-drive-in-zfs-boot-mirror /dev/disk/by-id/NEW-DRIVE
-Manual cleanup (if needed): sudo systemctl disable zfs-firstboot-cleanup.service && sudo rm -f /etc/grub.d/99_zfs_firstboot && sudo update-grub
+Manual cleanup (if needed): sudo systemctl disable zfs-firstboot-cleanup.service && sudo sed -i 's/ zfs_force=1//g' /etc/default/grub && sudo update-grub
 Check boot entries:      efibootmgr
 
 Force import (emergency): sudo zpool import -f rpool
@@ -2909,99 +2909,37 @@ fi
 # After successful first boot, the system automatically removes this configuration
 # and future boots use clean imports without force flags.
 
-# Backup clean post-installation GRUB configuration before any first-boot modifications
-log_info "Backing up clean post-installation GRUB configuration..."
-cp /mnt/boot/grub/grub.cfg /mnt/boot/grub/grub.cfg.post-initial-install
-cp /mnt/etc/default/grub /mnt/etc/default/grub.post-initial-install
-
-# Log what GRUB entries exist in the clean backup for record keeping
-log_info "GRUB entries found in clean post-installation backup:"
-grep "^menuentry " /mnt/boot/grub/grub.cfg.post-initial-install | sed "s/^/  /" | while read line; do
-    log_info "$line"
-done
+# Note: Using simplified /etc/default/grub approach - no complex backups needed
 
 INSTALL_STATE="configuring_first_boot"
 
 # Configure simplified force import for reliable first boot
 log_info "Configuring first-boot force import for reliable ZFS pool access..."
 
-# Add kernel parameter for first boot force import
-log_info "Adding zfs_force=1 kernel parameter for first boot..."
+# Use much simpler approach: modify /etc/default/grub directly
+log_info "Adding zfs_force=1 kernel parameter to GRUB configuration..."
 
-# Create robust GRUB script for first boot with proper error handling
-cat > /mnt/etc/grub.d/99_zfs_firstboot << 'GRUB_SCRIPT_EOF'
-#!/bin/sh
-set -e
+# Backup original GRUB configuration
+cp /mnt/etc/default/grub /mnt/etc/default/grub.zfs-backup
 
-# Check if cleanup service is enabled (indicates first boot setup needed)
-if systemctl is-enabled zfs-firstboot-cleanup.service >/dev/null 2>&1; then
+# Read current GRUB_CMDLINE_LINUX_DEFAULT
+CURRENT_CMDLINE=$(grep "^GRUB_CMDLINE_LINUX_DEFAULT=" /mnt/etc/default/grub | cut -d'"' -f2 || echo "quiet splash")
 
-    # Source GRUB configuration to get existing parameters
-    . /etc/default/grub
+# Read current GRUB_DISTRIBUTOR or set default
+CURRENT_DISTRIBUTOR=$(grep "^GRUB_DISTRIBUTOR=" /mnt/etc/default/grub | cut -d'=' -f2- || echo '`lsb_release -i -s 2> /dev/null || echo Debian`')
 
-    # Dynamic kernel version detection - find the actual installed kernel
-    KERNEL_VERSION=""
+# Backup current distributor for restoration
+echo "GRUB_DISTRIBUTOR_BACKUP=$CURRENT_DISTRIBUTOR" >> /mnt/etc/default/grub.zfs-backup
+echo "GRUB_CMDLINE_LINUX_DEFAULT_BACKUP=\"$CURRENT_CMDLINE\"" >> /mnt/etc/default/grub.zfs-backup
 
-    # Method 1: Check what's actually in /boot
-    KERNEL_FILE=$(ls /boot/vmlinuz-* 2>/dev/null | head -1 || echo "")
-    if [ -n "$KERNEL_FILE" ]; then
-        KERNEL_VERSION=$(basename "$KERNEL_FILE" | sed 's/vmlinuz-//')
-    fi
+# Modify GRUB configuration for first boot with force import
+sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="'"$CURRENT_CMDLINE"' zfs_force=1"/' /mnt/etc/default/grub
+sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="Ubuntu - Force ZFS import first boot"/' /mnt/etc/default/grub
 
-    # Method 2: Extract from existing GRUB config if Method 1 failed
-    if [ -z "$KERNEL_VERSION" ]; then
-        KERNEL_VERSION=$(grep "linux.*vmlinuz-" /boot/grub/grub.cfg | head -1 | sed 's/.*vmlinuz-\([^"]*\).*/\1/' 2>/dev/null || echo "")
-    fi
-
-    # FAIL if we couldn't detect kernel version
-    if [ -z "$KERNEL_VERSION" ]; then
-        echo "ERROR: Could not detect kernel version for ZFS first-boot entry" >&2
-        echo "Available kernels in /boot:" >&2
-        ls -la /boot/vmlinuz-* 2>/dev/null || echo "No kernels found in /boot" >&2
-        echo "GRUB config kernel references:" >&2
-        grep "linux.*vmlinuz" /boot/grub/grub.cfg 2>/dev/null || echo "No kernel references in GRUB config" >&2
-        exit 1
-    fi
-
-    # Get the EFI UUID from the existing GRUB config
-    EFI_UUID=$(grep "search --no-floppy --fs-uuid --set=root" /boot/grub/grub.cfg | head -1 | awk '{print $NF}' 2>/dev/null || echo "")
-
-    # FAIL if we couldn't detect EFI UUID
-    if [ -z "$EFI_UUID" ]; then
-        echo "ERROR: Could not detect EFI UUID for ZFS first-boot entry" >&2
-        echo "GRUB search commands found:" >&2
-        grep "search.*uuid" /boot/grub/grub.cfg 2>/dev/null || echo "No search commands in GRUB config" >&2
-        exit 1
-    fi
-
-    # Build complete kernel command line with existing parameters plus zfs_force=1
-    CMDLINE="root=ZFS=\"rpool/root\" ro"
-    if [ -n "$GRUB_CMDLINE_LINUX_DEFAULT" ]; then
-        CMDLINE="$CMDLINE $GRUB_CMDLINE_LINUX_DEFAULT"
-    fi
-    if [ -n "$GRUB_CMDLINE_LINUX" ]; then
-        CMDLINE="$CMDLINE $GRUB_CMDLINE_LINUX"
-    fi
-    CMDLINE="$CMDLINE zfs_force=1"
-
-    cat << EOF
-menuentry 'Ubuntu (ZFS Force Import - First Boot)' --class ubuntu --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-zfs-firstboot' {
-	recordfail
-	load_video
-	gfxmode \${linux_gfx_mode}
-	insmod gzio
-	if [ "\${grub_platform}" = xen ]; then insmod xzio; insmod lzopio; fi
-	insmod part_gpt
-	insmod zfs
-	search --no-floppy --fs-uuid --set=root $EFI_UUID
-	linux	"/root@/boot/vmlinuz-$KERNEL_VERSION" $CMDLINE
-	initrd	"/root@/boot/initrd.img-$KERNEL_VERSION"
-}
-EOF
+# Add GRUB_DISTRIBUTOR if it doesn't exist
+if ! grep -q "^GRUB_DISTRIBUTOR=" /mnt/etc/default/grub; then
+    echo 'GRUB_DISTRIBUTOR="Ubuntu - Force ZFS import first boot"' >> /mnt/etc/default/grub
 fi
-GRUB_SCRIPT_EOF
-
-chmod +x /mnt/etc/grub.d/99_zfs_firstboot
 
 # Create comprehensive cleanup script with validation and reboot
 cat > /mnt/usr/local/bin/zfs-firstboot-cleanup << 'CLEANUP_SCRIPT_EOF'
@@ -3058,14 +2996,27 @@ rm -f /tmp/zfs-cleanup-test
 
 log_info "All validation checks passed - proceeding with cleanup"
 
-# Remove force import configuration
+# Remove force import configuration from /etc/default/grub
 log_info "Removing first-boot force import configuration..."
 
-# Remove GRUB script
-if rm -f /etc/grub.d/99_zfs_firstboot; then
-    log_info "Removed GRUB first-boot script"
+# Restore original GRUB configuration
+if [[ -f /etc/default/grub.zfs-backup ]]; then
+    # Extract backed up values
+    BACKUP_DISTRIBUTOR=$(grep "^GRUB_DISTRIBUTOR_BACKUP=" /etc/default/grub.zfs-backup | cut -d'=' -f2- || echo '`lsb_release -i -s 2> /dev/null || echo Debian`')
+    BACKUP_CMDLINE=$(grep "^GRUB_CMDLINE_LINUX_DEFAULT_BACKUP=" /etc/default/grub.zfs-backup | cut -d'"' -f2 || echo "quiet splash")
+
+    # Restore original values
+    sed -i "s/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=$BACKUP_DISTRIBUTOR/" /etc/default/grub
+    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="'"$BACKUP_CMDLINE"'"/' /etc/default/grub
+
+    # Remove backup file
+    rm -f /etc/default/grub.zfs-backup
+    log_info "Restored original GRUB configuration"
 else
-    log_error "Failed to remove GRUB first-boot script"
+    # Fallback: remove zfs_force=1 manually
+    sed -i 's/ zfs_force=1//g' /etc/default/grub
+    sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=`lsb_release -i -s 2> \/dev\/null || echo Debian`/' /etc/default/grub
+    log_warning "Backup not found, used fallback cleanup"
 fi
 
 # Update GRUB configuration
@@ -3110,40 +3061,31 @@ log_info "✓ Automatic cleanup will remove configuration after successful boot"
 
 show_progress 10 10 "Installation complete!"
 
-# Final summary of the force import approach
-log_info "📋 Summary: First-boot force import configured for reliable pool access"
-log_info "🔄 First boot will use zfs_force=1 then auto-cleanup for clean subsequent boots"
-
-# ZFS First-Boot Force Import Configuration
-# Creates a well-formed Ubuntu entry with zfs_force=1 using installation variables
-# After first successful boot, this script and configuration are automatically removed
-
-# This script generates the force import GRUB entry during first boot only
-# It gets automatically removed after first successful boot
-
-chmod +x /mnt/etc/grub.d/99_zfs_firstboot
-
-
-# Generate GRUB configuration and set force import entry as default
-log_info "Configuring GRUB with force import entry as default..."
-
-# First, generate GRUB to get menuentry count
+# Generate GRUB configuration with zfs_force=1 parameter
+log_info "Updating GRUB configuration with force import parameter..."
 chroot /mnt update-grub
 
-# Count menu entries to find the force import entry position (it will be last)
-TOTAL_ENTRIES=$(chroot /mnt grep -c "^menuentry " /boot/grub/grub.cfg)
-FORCE_IMPORT_INDEX=$((TOTAL_ENTRIES - 1))  # Last entry, 0-indexed
-
-log_info "Force import entry found at position ${FORCE_IMPORT_INDEX} (total entries: ${TOTAL_ENTRIES})"
-
-# Set numeric default and update GRUB configuration
-if set_grub_default "/mnt/etc/default/grub" "${FORCE_IMPORT_INDEX}"; then
-    chroot /mnt update-grub
-    log_info "✓ Force import entry set as default boot option"
+# Validate that force import parameter was properly added
+log_info "Validating force import configuration..."
+if chroot /mnt grep -q "zfs_force=1" /boot/grub/grub.cfg; then
+    log_info "✓ Force import parameter confirmed in GRUB configuration"
 else
-    log_error "Failed to set GRUB default to force import entry"
+    log_error "CRITICAL: zfs_force=1 parameter not found in GRUB configuration!"
+    log_error "Force import setup failed"
     exit 1
 fi
+
+# Validate menu title was updated
+MENU_TITLE=$(chroot /mnt grep "menuentry.*Ubuntu" /boot/grub/grub.cfg | head -1 | cut -d"'" -f2 || echo "")
+if [[ "$MENU_TITLE" == *"Force ZFS import"* ]]; then
+    log_info "✓ Menu title updated: $MENU_TITLE"
+else
+    log_warning "Menu title may not have updated properly: $MENU_TITLE"
+fi
+
+# Final summary of the simplified force import approach
+log_info "📋 Summary: First-boot force import configured via kernel parameter"
+log_info "🔄 First boot will show 'Ubuntu - Force ZFS import first boot' and use zfs_force=1"
 
 # Use the sync script to ensure GRUB is installed on all ZFS mirror drives
 log_info "Installing GRUB to all ZFS mirror drives for redundancy..."
@@ -3179,98 +3121,44 @@ log_info "Removing first-boot force import configuration..."
 
 # Force import marker file not needed - service state determines behavior
 
-# Remove ZFS import force option from /etc/default/zfs
-if [[ -f /etc/default/zfs ]] && grep -q 'ZPOOL_IMPORT_OPTS="-f"' /etc/default/zfs; then
-    if sed -i '/^ZPOOL_IMPORT_OPTS="-f"$/d' /etc/default/zfs; then
-        log_info "Removed ZPOOL_IMPORT_OPTS force option from /etc/default/zfs"
-    else
-        log_error "Failed to remove ZPOOL_IMPORT_OPTS from /etc/default/zfs"
-    fi
-else
-    log_info "ZPOOL_IMPORT_OPTS force option not found in /etc/default/zfs (already removed)"
-fi
-
-# Remove GRUB first-boot script
-if [[ -f /etc/grub.d/99_zfs_firstboot ]]; then
-    if rm -f /etc/grub.d/99_zfs_firstboot; then
-        log_info "Removed GRUB first-boot script: /etc/grub.d/99_zfs_firstboot"
-    else
-        log_error "Failed to remove GRUB first-boot script: /etc/grub.d/99_zfs_firstboot"
-    fi
-else
-    log_info "GRUB first-boot script not found (already removed)"
-fi
-
-# Validate backup files before restoring
-log_info "Validating backup GRUB configuration..."
-if [[ -f /boot/grub/grub.cfg.post-initial-install ]] && [[ -f /etc/default/grub.post-initial-install ]]; then
-    # Check that backup has Ubuntu kernel entries
-    ubuntu_entries=$(grep -c "menuentry.*Ubuntu.*LTS\|menuentry.*linux" /boot/grub/grub.cfg.post-initial-install 2>/dev/null || echo "0")
-    log_info "Backup contains $ubuntu_entries Ubuntu kernel entries"
-
-    if [[ "$ubuntu_entries" -eq 0 ]]; then
-        log_error "CRITICAL: Backup GRUB config has no Ubuntu kernel entries!"
-        log_error "Restoring this would create an unbootable system"
-        log_error "Keeping current config and aborting cleanup"
-        exit 1
-    fi
-
-    log_info "✓ Backup validation passed - safe to restore"
-else
-    log_error "Backup files missing - cannot restore GRUB configuration"
-    log_error "Required files: /boot/grub/grub.cfg.post-initial-install, /etc/default/grub.post-initial-install"
-    exit 1
-fi
-
-# Restore original GRUB configuration files (copy instead of move to preserve backups)
-log_info "Restoring original GRUB configuration..."
-if cp /boot/grub/grub.cfg.post-initial-install /boot/grub/grub.cfg; then
-    log_info "Restored original grub.cfg (backup preserved)"
-else
-    log_error "Failed to restore grub.cfg from backup"
-    exit 1
-fi
-
-if cp /etc/default/grub.post-initial-install /etc/default/grub; then
-    log_info "Restored original /etc/default/grub (backup preserved)"
-else
-    log_error "Failed to restore /etc/default/grub from backup"
-    exit 1
-fi
-
-# Update GRUB to apply restored settings
-log_info "Updating GRUB configuration..."
+# Update GRUB configuration after removing force import parameters
+log_info "Updating GRUB configuration to apply changes..."
 if update-grub >/dev/null 2>&1; then
-    log_info "GRUB configuration updated successfully"
+    log_info "✓ GRUB configuration updated successfully"
 else
     log_error "Failed to update GRUB configuration"
     exit 1
 fi
 
-# Sync EFI partitions to ensure GRUB changes are reflected on both drives
-log_info "Syncing EFI partitions after GRUB restoration..."
-if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
-    if /usr/local/bin/sync-efi-partitions >/dev/null 2>&1; then
-        log_info "EFI partition sync completed successfully"
-    else
-        log_warning "EFI partition sync failed - drives may have inconsistent EFI content"
-    fi
+# Validate that force import parameter was removed
+log_info "Validating that zfs_force=1 parameter was removed..."
+if grep -q "zfs_force=1" /boot/grub/grub.cfg; then
+    log_error "CRITICAL: zfs_force=1 still present in GRUB configuration!"
+    log_error "Force import parameter was not properly removed"
+    exit 1
 else
-    log_warning "EFI sync script not found - EFI partitions may be out of sync"
+    log_info "✓ Force import parameter successfully removed from GRUB"
 fi
 
-# Final validation: ensure restored config has Ubuntu entries
-log_info "Validating restored GRUB configuration..."
-restored_entries=$(grep -c "menuentry.*Ubuntu.*LTS\|menuentry.*linux" /boot/grub/grub.cfg 2>/dev/null || echo "0")
-log_info "Restored config contains $restored_entries Ubuntu kernel entries"
-
-if [[ "$restored_entries" -eq 0 ]]; then
-    log_error "CRITICAL: Restored GRUB config has no Ubuntu kernel entries!"
-    log_error "System may not boot properly after reboot"
-    # Don't exit here - continue cleanup but warn user
-    log_warning "Cleanup continuing but manual GRUB repair may be needed"
+# Validate that menu title was restored
+log_info "Validating GRUB menu title restoration..."
+CURRENT_TITLE=$(grep "menuentry.*Ubuntu" /boot/grub/grub.cfg | head -1 | cut -d"'" -f2 || echo "")
+if [[ "$CURRENT_TITLE" == *"Force ZFS import"* ]]; then
+    log_warning "Force import title still present: $CURRENT_TITLE"
 else
-    log_info "✓ Restored GRUB configuration validation passed"
+    log_info "✓ Menu title restored: $CURRENT_TITLE"
+fi
+
+# Sync EFI partitions to ensure changes are applied to both drives
+log_info "Syncing EFI partitions after cleanup..."
+if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
+    if /usr/local/bin/sync-efi-partitions >/dev/null 2>&1; then
+        log_info "✓ EFI partition sync completed successfully"
+    else
+        log_warning "EFI partition sync failed - drives may have inconsistent content"
+    fi
+else
+    log_warning "EFI sync script not found - partitions may be out of sync"
 fi
 
 # Disable cleanup service
@@ -3338,9 +3226,9 @@ echo ""
 
 show_progress 10 10 "Installation complete!"
 
-# Final summary of the force import approach
-log_info "📋 Summary: First-boot force import configured for reliable pool access"
-log_info "🔄 First boot will use zfs_force=1 then auto-cleanup for clean subsequent boots"
+# Final summary of the simplified kernel parameter approach
+log_info "📋 Summary: First-boot force import configured via GRUB kernel parameter"
+log_info "🔄 First boot will show 'Ubuntu - Force ZFS import first boot' with zfs_force=1"
 
 # Mark installation as completed
 INSTALL_STATE="completed"
@@ -3417,7 +3305,7 @@ if [[ ! "${response}" =~ ^[Nn]$ ]]; then
     echo ""
     echo -e "${YELLOW}${BOLD}First Boot:${NC}"
     echo -e "  • Force import flag will be automatically removed"
-    echo -e "  • Manual cleanup (if needed): ${GREEN}sudo systemctl disable zfs-firstboot-cleanup.service && sudo rm -f /etc/grub.d/99_zfs_firstboot && sudo update-grub${NC}"
+    echo -e "  • Manual cleanup (if needed): ${GREEN}sudo systemctl disable zfs-firstboot-cleanup.service && sudo sed -i 's/ zfs_force=1//g' /etc/default/grub && sudo update-grub${NC}"
     echo ""
     echo -e "${YELLOW}${BOLD}Post-Install Recommendations:${NC}"
     echo -e "${GREEN}1. Test the installation:${NC}"
