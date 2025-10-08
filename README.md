@@ -327,6 +327,37 @@ zpool list
 zpool status rpool
 ```
 
+### UEFI Boot Order Configuration
+
+**IMPORTANT**: For maximum redundancy, configure your UEFI boot order to alternate between drives:
+
+**Recommended Boot Order:**
+1. **First boot device**: Drive 1 EFI partition (e.g., `Samsung-SSD-990-363M`)
+2. **Second boot device**: Drive 2 EFI partition (e.g., `Samsung-SSD-990-789N`)
+3. Other boot devices...
+
+**Why this matters:**
+- If Drive 1 fails completely, the system automatically boots from Drive 2
+- Each drive has its own EFI partition with a complete GRUB installation
+- The script creates drive-specific UEFI folder names for easy identification
+- Alternating boot order ensures true redundancy with automatic failover
+
+**How to configure:**
+1. Reboot and enter UEFI/BIOS setup (usually F2, F12, Del, or Esc during boot)
+2. Navigate to Boot Order or Boot Priority settings
+3. Look for Ubuntu entries with drive-specific names (e.g., `ubuntu` or the drive identifier)
+4. Set first boot device to one drive's EFI partition
+5. Set second boot device to the other drive's EFI partition
+6. Save settings and exit
+
+**Identifying drives in UEFI:**
+- The script creates unique EFI folder names based on drive model and serial
+- Use the drive identifier naming shown during installation
+- If drives appear identical, use the Smart EFI Naming identifiers documented above
+
+**Testing failover:**
+After configuration, you can test automatic failover by simulating drive failure (see TROUBLESHOOTING.md for details).
+
 ### Maintenance Commands
 ```bash
 # Monthly scrub (automated via cron)
@@ -574,7 +605,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.2.0 - Simplified GRUB kernel parameter approach
+- **Script Version**: 6.3.2 - Fixed service enablement timing and duplicate cleanup scripts
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
@@ -585,6 +616,7 @@ MIT License - See original repository for details.
 - **AppArmor Support**: Configurable security (enabled by default)
 - **Drive Failure Simulation**: Built-in commands for testing resilience
 - **EFI Sync Utility**: Automatic synchronization between EFI partitions
+- **Smart EFI Naming**: Drive-specific UEFI folder names for disambiguation
 - **Fixed Boot Pool Mounting**: Resolves mount conflicts present in the official OpenZFS documentation
 
 ### Boot Pool Mount Fix (v5.2.5)
@@ -596,6 +628,57 @@ MIT License - See original repository for details.
 - **bpool/boot**: Uses `mountpoint=/boot` (single mount point)
 
 **Impact**: Eliminates `update-grub` failures ("didn't find any valid initrd or kernel") and ensures long-term system maintainability for kernel updates.
+
+### Smart EFI Naming Strategy (v6.3.2)
+
+**Problem**: Traditional EFI sync processes use unstable folder naming (finding any `Ubuntu-*` folder) which can create identical folder names when using multiple drives of the same model, making drives indistinguishable in UEFI boot menus.
+
+**Solution**: Hybrid model-suffix naming approach that creates unique, stable identifiers while respecting conservative UEFI character limits.
+
+**Implementation**:
+- **Format**: `<Model15chars>-<Last4Suffix>`
+- **Character Limit**: 20 characters maximum (conservative limit for UEFI/BIOS compatibility)
+- **Uniqueness**: Last 4 characters from `/dev/disk/by-id/` suffix ensure drive disambiguation
+- **Stability**: Uses stable device identifiers, not variable `/dev/sdX` names
+
+**Examples**:
+```bash
+# Samsung NVMe SSD
+/dev/disk/by-id/nvme-Samsung_SSD_990_PRO_2TB_S7LANJ0Y118363M
+→ UEFI folder: "Samsung-SSD-990-363M" (20 chars)
+
+# Crucial SATA SSD
+/dev/disk/by-id/ata-CT1000T500SSD8_2523509D5ADF
+→ UEFI folder: "CT1000T500SSD8-5ADF" (19 chars)
+
+# Multiple identical drives (same model, different serials)
+/dev/disk/by-id/ata-WDC_WD10EZEX-08WN4A0_WD-WCC6Y1234567
+→ UEFI folder: "WDC-WD10EZEX-08-4567" (20 chars)
+/dev/disk/by-id/ata-WDC_WD10EZEX-08WN4A0_WD-WCC6Y1789ABC
+→ UEFI folder: "WDC-WD10EZEX-08-9ABC" (20 chars)
+
+# SCSI SATA drive (SATA prefix automatically stripped)
+/dev/disk/by-id/scsi-SATA_Samsung_SSD_860_S5R1NF0N123456
+→ UEFI folder: "Samsung-SSD-860-3456" (20 chars)
+```
+
+**Technical Benefits**:
+- **Drive Disambiguation**: Identical drive models get unique UEFI boot entries
+- **UEFI Compatibility**: Conservative 20-character limit prevents display issues
+- **Human Readable**: Model name provides clear drive identification
+- **Stable Identifiers**: Suffix ensures consistent naming across reboots
+- **Fallback Safety**: Generic identifiers for edge cases without predictable paths
+
+**Naming Logic**:
+1. Extract model and suffix from stable `/dev/disk/by-id/` path using regex
+2. Strip redundant prefixes (SATA/ATA) for cleaner model names
+3. Convert underscores to dashes for UEFI compatibility
+4. Truncate model to 15 characters maximum
+5. Extract last 4 characters from suffix portion
+6. Combine with dash separator: `Model15-Suff`
+7. Fallback to device-specific generic names if path parsing fails
+
+This approach ensures reliable drive identification in UEFI boot menus while maintaining compatibility across different firmware implementations and staying well under documented EFI filesystem limits.
 
 ---
 

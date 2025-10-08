@@ -14,7 +14,7 @@
 **Root Cause:**
 ZFS pools created in live CD environment may not import cleanly on first boot due to different system context.
 
-**Solution (v6.1.0+ - Simplified Force Import):**
+**Solution (v6.3.0+ - Simplified Force Import):**
 - **Kernel Parameter Force Import:** Uses `zfs_force=1` in GRUB kernel command line for reliable first boot
 - **Service-Controlled Cleanup:** Systemd service automatically removes force import after successful boot
 - **Single Pool Architecture:** Only `rpool` exists - no complex dual-pool management
@@ -27,7 +27,7 @@ ZFS pools created in live CD environment may not import cleanly on first boot du
 - **Automatic Cleanup:** Service validates successful boot and removes itself after one successful import
 - **Smart Integration:** Preserves existing kernel parameters (console, etc.) while adding force import
 
-### Manual Recovery Instructions (v6.1.0+)
+### Manual Recovery Instructions (v6.3.0+)
 
 **If First Boot Fails (Rare):**
 If the automatic force import somehow fails, you can manually import:
@@ -65,7 +65,7 @@ sudo journalctl -u zfs-firstboot-cleanup.service
 sudo journalctl | grep "zfs-firstboot-cleanup"
 ```
 
-### Architecture Changes (v6.1.0+)
+### Architecture Changes (v6.3.0+)
 
 **Single-Pool Architecture:**
 - **Only `rpool` exists** - eliminated `bpool` due to Ubuntu 24.04 systemd incompatibility
@@ -90,7 +90,7 @@ sudo journalctl | grep "zfs-firstboot-cleanup"
 - **v6.1.0+:** Clean single-approach force import architecture
 
 **Migration from Legacy Versions:**
-The v6.1.0+ single-pool architecture eliminates all previous issues including:
+The v6.3.0+ single-pool architecture eliminates all previous issues including:
 - Dual-pool import failures and systemd assertion errors
 - Import timing and coordination issues
 - Boot pool import failures in Ubuntu 24.04
@@ -132,7 +132,7 @@ sudo systemctl restart zfs-mount.service
 
 ## Script Configuration Details
 
-### Single Pool Configuration (v6.1.0+)
+### Single Pool Configuration (v6.3.0+)
 - **Only `rpool`** exists with `cachefile=none`
 - **GRUB2 Compatible:** Uses `compatibility=grub2` feature set
 - **Service-Controlled Force Import:** `zfs-firstboot-cleanup.service` manages first boot
@@ -146,7 +146,7 @@ sudo systemctl restart zfs-mount.service
 5. **Cleanup:** Service disables itself and updates GRUB configuration
 6. **Reboot:** System reboots cleanly without force import
 
-### Partition Layout (v6.1.0+)
+### Partition Layout (v6.3.0+)
 ```
 Disk 1 & 2 (mirrored):
 - Partition 1: EFI System (1GB) - FAT32
@@ -157,13 +157,15 @@ Disk 1 & 2 (mirrored):
 ## Development Notes
 
 ### Recent Changes
+- **2025-10-08:** v6.3.2 - **CRITICAL**: Fixed service enablement timing and duplicate cleanup scripts
+- **2025-10-08:** v6.3.0 - **MAJOR**: Robust temporary GRUB script approach with no permanent system modifications
 - **2025-10-08:** v6.2.0 - **MAJOR**: Simplified GRUB kernel parameter approach
 - **2025-10-08:** v6.1.0 - **MAJOR**: Clean single-approach force import architecture
 - **2025-10-07:** v6.0.1 - Cleanup dual-pool references and undefined variables
 - **2025-10-07:** v6.0.0 - **MAJOR**: Single-pool architecture refactor for Ubuntu 24.04 compatibility
 - **Historical:** v5.x and earlier used dual-pool architecture (now deprecated)
 
-### Testing Checklist (v6.1.0+)
+### Testing Checklist (v6.3.0+)
 - [ ] Single rpool created successfully with GRUB2 compatibility
 - [ ] First-boot service enabled during installation
 - [ ] System boots automatically with force import
@@ -210,7 +212,7 @@ When making **ANY** changes to code files, you **MUST** update the corresponding
    - Updates system compatibility
 
 **Version Numbering:** Use semantic versioning (Major.Minor.Patch)
-- Current version: **6.2.0** (as of 2025-10-08)
+- Current version: **6.3.2** (as of 2025-10-08)
 
 **⚠️ CRITICAL: Version Synchronization Required**
 When updating version numbers, you **MUST** update ALL of these locations:

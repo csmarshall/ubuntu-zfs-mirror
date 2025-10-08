@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.3.1 - Enhanced logging and debugging support
+# Version: 6.3.2 - Fixed service enablement timing validation
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,9 +11,8 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.3.1"
+readonly VERSION="6.3.2"
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
 # Color codes for output
@@ -93,7 +92,6 @@ countdown_timer() {
     # Set up trap to catch CTRL+C
     trap 'echo -e "\n${GREEN}Operation cancelled by user${NC}"; exit 0' INT
 
-    local original_seconds=$seconds
     while [[ $seconds -gt 0 ]]; do
         printf "\r${BOLD}Starting in: %2d seconds... ${NC}" "$seconds"
 
@@ -298,72 +296,97 @@ stop_disk_services() {
     done < <(get_all_partitions "${disk}")
 }
 
-# Get drive identifier for UEFI naming with comprehensive validation
+# Get drive identifier for UEFI naming with hybrid model-suffix approach
+# Creates unique identifiers in format: <Model15chars>-<Last4Suffix>
+# This ensures drives can be distinguished even if identical models
 get_drive_identifier() {
     local disk_path="$1"
-    local identifier=""
-    
+    local model_part=""
+    local suffix_part=""
+    local full_id=""
+
     log_debug "Generating UEFI-compatible identifier for: ${disk_path}" >&2
-    
+
     # Validate input
     if [[ -z "${disk_path}" ]]; then
         log_error "get_drive_identifier: Empty disk path provided" >&2
         return 1
     fi
-    
-    # Try to extract model name from the disk path using improved regex
-    if [[ "${disk_path}" =~ nvme-(.+)_[A-Za-z0-9]{8,} ]]; then
-        identifier="${BASH_REMATCH[1]}"
-        log_debug "Extracted NVMe identifier: ${identifier}" >&2
-    elif [[ "${disk_path}" =~ ata-(.+)_[A-Za-z0-9]{8,} ]] || [[ "${disk_path}" =~ scsi-(.+)_[A-Za-z0-9]{8,} ]]; then
-        identifier="${BASH_REMATCH[1]}"
-        log_debug "Extracted ATA/SCSI identifier: ${identifier}" >&2
+
+    # Extract model and suffix from by-id path
+    if [[ "${disk_path}" =~ nvme-(.+)_([A-Za-z0-9-]{8,})$ ]]; then
+        model_part="${BASH_REMATCH[1]}"
+        suffix_part="${BASH_REMATCH[2]}"
+        log_debug "Extracted NVMe model: '${model_part}', suffix: '${suffix_part}'" >&2
+    elif [[ "${disk_path}" =~ (ata|scsi)-(.+)_([A-Za-z0-9-]{8,})$ ]]; then
+        model_part="${BASH_REMATCH[2]}"
+        suffix_part="${BASH_REMATCH[3]}"
+        log_debug "Extracted ${BASH_REMATCH[1]} model: '${model_part}', suffix: '${suffix_part}'" >&2
     else
-        # Fallback to using lsblk with better error handling
+        # Fallback to using lsblk with device name as suffix
         local dev_name
         dev_name=$(readlink -f "${disk_path}" 2>/dev/null | xargs basename 2>/dev/null || echo "")
         if [[ -n "${dev_name}" && -b "/dev/${dev_name}" ]]; then
-            identifier=$(lsblk -ndo MODEL "/dev/${dev_name}" 2>/dev/null | sed 's/[[:space:]]*$//' | sed 's/ /-/g' || echo "")
-            log_debug "lsblk fallback identifier: ${identifier}" >&2
+            model_part=$(lsblk -ndo MODEL "/dev/${dev_name}" 2>/dev/null | sed 's/[[:space:]]*$//' | sed 's/ /_/g' || echo "")
+            suffix_part="${dev_name}"
+            log_debug "lsblk fallback model: '${model_part}', device suffix: '${suffix_part}'" >&2
         fi
     fi
-    
-    # If still no identifier, use generic one based on device name
-    if [[ -z "${identifier}" ]]; then
+
+    # If still no model, use generic one with unique device-based suffix
+    if [[ -z "${model_part}" ]]; then
         local dev_name
-        dev_name=$(basename "${disk_path}")
-        identifier="Disk-${dev_name}"
-        log_debug "Generic fallback identifier: ${identifier}" >&2
+        dev_name=$(basename "$(readlink -f "${disk_path}" 2>/dev/null)" 2>/dev/null || basename "${disk_path}")
+        model_part="Disk"
+        suffix_part="${dev_name}"
+        log_debug "Generic fallback model: '${model_part}', device suffix: '${suffix_part}'" >&2
     fi
-    
-    # Clean up the identifier to ensure UEFI compatibility
-    identifier="${identifier//_/-}"
-    identifier="${identifier##-}"
-    identifier="${identifier%%-}"
-        
-    # Remove any consecutive dashes
-    while [[ "${identifier}" == *"--"* ]]; do
-        identifier="${identifier//--/-}"
+
+    # Clean up model part for UEFI compatibility
+    # Strip common redundant prefixes (case insensitive)
+    if [[ "${model_part}" =~ ^[Ss][Aa][Tt][Aa][-_](.+)$ ]]; then
+        model_part="${BASH_REMATCH[1]}"
+    elif [[ "${model_part}" =~ ^[Aa][Tt][Aa][-_](.+)$ ]]; then
+        model_part="${BASH_REMATCH[1]}"
+    fi
+
+    # Convert underscores to dashes for consistency
+    model_part="${model_part//_/-}"
+    model_part="${model_part##-}"
+    model_part="${model_part%%-}"
+
+    # Remove consecutive dashes from model
+    while [[ "${model_part}" == *"--"* ]]; do
+        model_part="${model_part//--/-}"
     done
-    
+
+    # Truncate model to 15 characters to leave room for -XXXX suffix
+    if [[ ${#model_part} -gt 15 ]]; then
+        model_part="${model_part:0:15}"
+        model_part="${model_part%-}"  # Remove trailing dash if any
+        log_debug "Truncated model to 15 chars: '${model_part}'" >&2
+    fi
+
+    # Get last 4 characters from suffix for uniqueness (typically serial-like)
+    last_four="${suffix_part: -4}"
+    if [[ ${#last_four} -lt 4 ]]; then
+        # Pad with zeros if suffix is too short
+        last_four=$(printf "%04s" "${last_four}" | tr ' ' '0')
+    fi
+
+    # Construct final identifier: Model-Last4Suffix (max 20 chars: 15 + 1 + 4)
+    full_id="${model_part}-${last_four}"
+
     # Final validation
-    if [[ -z "${identifier}" ]]; then
-        identifier="GenericDisk"
-        log_warning "Empty identifier after cleanup, using generic fallback" >&2
+    if [[ -z "${full_id}" || "${full_id}" == "-" ]]; then
+        # Last resort: use device name with padding
+        dev_name=$(basename "${disk_path}")
+        full_id="Unknown-${dev_name: -4}"
+        log_warning "Invalid identifier constructed, using device-based fallback: '${full_id}'" >&2
     fi
-        
-    # Final trailing dash removal
-    identifier="${identifier%-}"
-    
-    # Limit length for UEFI compatibility (20 chars max)
-    if [[ ${#identifier} -gt 20 ]]; then
-        identifier="${identifier:0:20}"
-        identifier="${identifier%-}"
-        log_debug "Truncated identifier to 20 chars: ${identifier}" >&2
-    fi
-    
-    log_debug "Final UEFI identifier: '${identifier}'" >&2
-    echo "${identifier}"
+
+    log_debug "Final UEFI identifier: '${full_id}' (${#full_id} chars)" >&2
+    echo "${full_id}"
     return 0
 }
 
@@ -2924,9 +2947,19 @@ cat > /mnt/etc/grub.d/09_zfs_force_import << 'GRUB_FORCE_SCRIPT_EOF'
 #!/bin/sh
 set -e
 
-# Only run if cleanup service is enabled (first boot only)
-if ! systemctl is-enabled zfs-firstboot-cleanup.service >/dev/null 2>&1; then
-    logger -t "grub-zfs-force" -p user.info "Cleanup service not enabled, skipping force import menuentry generation"
+# Only run if cleanup service exists and is enabled (first boot only)
+# During installation, the service file exists but may not be enabled yet
+if [ -f /etc/systemd/system/zfs-firstboot-cleanup.service ]; then
+    # During first boot, check if service is enabled
+    if systemctl is-enabled zfs-firstboot-cleanup.service >/dev/null 2>&1; then
+        logger -t "grub-zfs-force" -p user.info "Cleanup service enabled, generating force import menuentry"
+    else
+        # During installation, service exists but not enabled yet - still generate
+        logger -t "grub-zfs-force" -p user.info "Installation phase: generating force import menuentry"
+    fi
+else
+    # No service file means cleanup completed or not a ZFS force import system
+    logger -t "grub-zfs-force" -p user.info "No cleanup service found, skipping force import menuentry generation"
     exit 0
 fi
 
@@ -3145,6 +3178,18 @@ else
     log_warning "zfs_force=1 parameter still present in GRUB configuration"
 fi
 
+# Sync EFI partitions to ensure changes are applied to both drives
+log_info "Syncing EFI partitions after cleanup..."
+if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
+    if /usr/local/bin/sync-efi-partitions >/dev/null 2>&1; then
+        log_info "✓ EFI partition sync completed successfully"
+    else
+        log_warning "EFI partition sync failed - drives may have inconsistent content"
+    fi
+else
+    log_warning "EFI sync script not found - partitions may be out of sync"
+fi
+
 # Disable this service
 if systemctl disable zfs-firstboot-cleanup.service >/dev/null 2>&1; then
     log_info "Disabled first-boot cleanup service"
@@ -3218,91 +3263,7 @@ log_info "Installing GRUB to all ZFS mirror drives for redundancy..."
 chroot /mnt /usr/local/bin/sync-grub-to-mirror-drives
 log_info "✓ GRUB updated and installed on all ZFS mirror drives with first-boot configuration"
 
-# Create external cleanup script (proper approach instead of inline systemd script)
-cat > /mnt/usr/local/bin/zfs-firstboot-cleanup << 'EOF'
-#!/bin/bash
-# ZFS First-Boot Cleanup Script
-# Removes force import configuration after successful first boot
-
-set -euo pipefail
-
-# Set up logging functions
-log_info() { logger -t "zfs-firstboot-cleanup" -p user.info "$1"; echo "$1"; }
-log_error() { logger -t "zfs-firstboot-cleanup" -p user.err "$1"; echo "ERROR: $1" >&2; }
-log_warning() { logger -t "zfs-firstboot-cleanup" -p user.warning "$1"; echo "WARNING: $1"; }
-
-log_info "=== ZFS First-Boot Cleanup Service Starting ==="
-log_info "Hostname: $(hostname)"
-
-# Log ZFS pool status
-pool_status=$(zpool list -H -o name,health 2>/dev/null | tr "\t" " " | sed "s/^/  /")
-if [[ -n "$pool_status" ]]; then
-    log_info "ZFS pool status:"
-    echo "$pool_status" | while read line; do log_info "$line"; done
-else
-    log_warning "No ZFS pools found"
-fi
-
-log_info "Removing first-boot force import configuration..."
-
-# Force import marker file not needed - service state determines behavior
-
-# Update GRUB configuration after removing force import parameters
-log_info "Updating GRUB configuration to apply changes..."
-if update-grub >/dev/null 2>&1; then
-    log_info "✓ GRUB configuration updated successfully"
-else
-    log_error "Failed to update GRUB configuration"
-    exit 1
-fi
-
-# Validate that force import parameter was removed
-log_info "Validating that zfs_force=1 parameter was removed..."
-if grep -q "zfs_force=1" /boot/grub/grub.cfg; then
-    log_error "CRITICAL: zfs_force=1 still present in GRUB configuration!"
-    log_error "Force import parameter was not properly removed"
-    exit 1
-else
-    log_info "✓ Force import parameter successfully removed from GRUB"
-fi
-
-# Validate that menu title was restored
-log_info "Validating GRUB menu title restoration..."
-CURRENT_TITLE=$(grep "menuentry.*Ubuntu" /boot/grub/grub.cfg | head -1 | cut -d"'" -f2 || echo "")
-if [[ "$CURRENT_TITLE" == *"Force ZFS import"* ]]; then
-    log_warning "Force import title still present: $CURRENT_TITLE"
-else
-    log_info "✓ Menu title restored: $CURRENT_TITLE"
-fi
-
-# Sync EFI partitions to ensure changes are applied to both drives
-log_info "Syncing EFI partitions after cleanup..."
-if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
-    if /usr/local/bin/sync-efi-partitions >/dev/null 2>&1; then
-        log_info "✓ EFI partition sync completed successfully"
-    else
-        log_warning "EFI partition sync failed - drives may have inconsistent content"
-    fi
-else
-    log_warning "EFI sync script not found - partitions may be out of sync"
-fi
-
-# Disable cleanup service
-log_info "Disabling cleanup service..."
-if systemctl disable zfs-firstboot-cleanup.service >/dev/null 2>&1; then
-    log_info "Cleanup service disabled successfully"
-else
-    log_error "Failed to disable cleanup service (exit code: $?)"
-fi
-
-log_info "=== ZFS First-Boot Cleanup Complete ==="
-log_info "Force import configuration removed - future boots will use standard ZFS imports"
-log_info "Rebooting system in 5 seconds to remove force flags from ZFS import processes..."
-sleep 5
-reboot
-EOF
-
-chmod +x /mnt/usr/local/bin/zfs-firstboot-cleanup
+# The comprehensive cleanup script was already created above with validation and reboot
 
 # Create early-boot systemd service for immediate cleanup and reboot
 cat > /mnt/etc/systemd/system/zfs-firstboot-cleanup.service << 'EOF'

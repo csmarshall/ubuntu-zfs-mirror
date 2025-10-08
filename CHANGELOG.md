@@ -1,5 +1,33 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.3.2 - Fixed service enablement timing validation (2025-10-08)
+
+**Critical Bug Fix - Resolved Installation Validation Failure**
+
+Fixed critical issue where installation would fail validation because the temporary GRUB script would exit early during `update-grub` execution, preventing the `zfs_force=1` parameter from appearing in grub.cfg.
+
+**Root Cause:**
+- Temporary GRUB script checked if cleanup service was enabled before generating menuentry
+- During installation: script created → `update-grub` runs → service enabled later
+- Script would exit with "service not enabled" before generating the required menuentry
+
+**Solution:**
+- Modified temporary GRUB script logic to check for service file existence instead of enablement status
+- During installation: generates menuentry if service file exists (even if not enabled yet)
+- During cleanup: still respects enablement status for proper cleanup behavior
+- Maintains robust rollback while fixing installation validation
+
+**Technical Details:**
+- **Installation Phase**: Script generates menuentry when `/etc/systemd/system/zfs-firstboot-cleanup.service` exists
+- **First Boot Phase**: Script checks service enablement and generates menuentry if enabled
+- **Post-Cleanup Phase**: Script exits early when service file is removed (clean state)
+
+**User Impact:** Installation now completes successfully without validation failures. The `zfs_force=1` parameter correctly appears in grub.cfg during installation.
+
+**Changes:** Modified service detection logic in temporary GRUB script generation
+
+----
+
 ## v6.3.1 - Enhanced logging and debugging support (2025-10-08)
 
 **Comprehensive Logging Implementation**
