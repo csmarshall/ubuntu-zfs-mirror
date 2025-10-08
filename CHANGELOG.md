@@ -1,5 +1,30 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.0.5 - Fix TIMEZONE unbound variable error in chroot configuration (2025-10-08)
+
+**Critical Fix for Installation Failure**
+
+Fixed "TIMEZONE: unbound variable" error during chroot configuration that was preventing installation completion.
+
+**Root Cause:**
+The TIMEZONE variable was collected during configuration but not passed as an environment variable to the chroot execution, causing the timezone configuration to fail inside the chroot environment.
+
+**Bug Fix:**
+- **Environment Variable Pass-Through** (Line 2336): Added `TIMEZONE="${TIMEZONE}"` to chroot env variables
+- **Validation Enhancement** (Lines 499, 2085): Added "TIMEZONE" to required_vars arrays for proper validation
+- **Complete Fix**: TIMEZONE now properly available inside chroot for system configuration
+
+**Technical Details:**
+- Fixed chroot execution to include TIMEZONE in environment variable list
+- Updated both validate_chroot_environment functions to check TIMEZONE as required
+- Ensures timezone configuration (ln -sf, echo, dpkg-reconfigure) works correctly inside chroot
+
+**Impact:** Installation now completes successfully without TIMEZONE variable errors during tzdata configuration.
+
+**Changes:** +3, -0 lines
+
+----
+
 ## v6.0.4 - Centralize configuration prompting and fix timezone selection (2025-10-07)
 
 **Improved user experience with centralized configuration collection**

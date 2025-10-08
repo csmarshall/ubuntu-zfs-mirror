@@ -102,13 +102,17 @@ sudo ./zfs_mirror_setup.sh hostname /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL12
 
 ### 4. Recommended: Clean Installation
 ```bash
+# Basic installation with drive preparation
 sudo ./zfs_mirror_setup.sh --prepare hostname /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL123456 /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL789012
+
+# Non-interactive installation with timezone (recommended for automation)
+sudo ./zfs_mirror_setup.sh --prepare --timezone=UTC hostname /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL123456 /dev/disk/by-id/nvme-VENDOR_SSD_1TB_SERIAL789012
 ```
 
 ## Usage Options
 
 ```bash
-./zfs_mirror_setup.sh [--prepare] <hostname> <disk1> <disk2>
+./zfs_mirror_setup.sh [--prepare] [--timezone=TIMEZONE] <hostname> <disk1> <disk2>
 ./zfs_mirror_setup.sh --wipe-only <disk1> <disk2>
 ```
 
@@ -173,6 +177,43 @@ sudo ./zfs_mirror_setup.sh --wipe-only \
 - Validates drive paths before proceeding
 - Shows clear warnings about data destruction
 - Cannot be run accidentally without explicit confirmation
+
+#### `--timezone=TIMEZONE`
+Specify timezone during installation to skip interactive timezone selection.
+
+**What it does:**
+- Sets system timezone non-interactively during installation
+- Validates timezone against available zoneinfo database
+- Eliminates timezone prompting for automated installations
+- Configures tzdata package automatically in target system
+
+**Timezone Format:**
+- Use standard tz database format (e.g., `America/New_York`, `Europe/London`, `Asia/Tokyo`)
+- Case-sensitive timezone names
+- See [List of tz database time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) for valid options
+
+**Examples:**
+```bash
+# US Eastern Time
+sudo ./zfs_mirror_setup.sh --prepare --timezone=America/New_York myserver disk1 disk2
+
+# UTC (recommended for servers)
+sudo ./zfs_mirror_setup.sh --prepare --timezone=UTC myserver disk1 disk2
+
+# Pacific Time
+sudo ./zfs_mirror_setup.sh --prepare --timezone=America/Los_Angeles myserver disk1 disk2
+```
+
+**When to use:**
+- Automated or scripted installations
+- When you know the exact timezone needed
+- To avoid interrupting installation with interactive prompts
+- For consistent deployments across multiple systems
+
+**Fallback behavior:**
+- If timezone is invalid, script falls back to interactive selection
+- If not specified, script prompts using `tzselect` during installation
+- UTC is used as final fallback if all selection methods fail
 
 ## Architecture
 
@@ -534,7 +575,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 5.2.5 - Fixed ZFS boot mount conflicts that broke update-grub
+- **Script Version**: 6.0.5 - Fix TIMEZONE unbound variable error in chroot configuration
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

@@ -3,7 +3,7 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.0.4 - Centralize configuration prompting and fix timezone selection
+# Version: 6.0.5 - Fix TIMEZONE unbound variable error in chroot configuration
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.0.4"
+readonly VERSION="6.0.5"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
@@ -496,7 +496,7 @@ generate_efi_volume_id() {
 
 # Validate required environment variables in chroot
 validate_chroot_environment() {
-    local required_vars=("DISK1" "DISK2" "EFI_VOLUME_ID" "ADMIN_USER" "ADMIN_PASS")
+    local required_vars=("DISK1" "DISK2" "EFI_VOLUME_ID" "ADMIN_USER" "ADMIN_PASS" "TIMEZONE")
     local missing_vars=()
     
     for var in "${required_vars[@]}"; do
@@ -2082,7 +2082,7 @@ exec 2>&1
 log_info "Starting chroot system configuration"
 
 # Validate required environment variables
-required_vars=("DISK1" "DISK2" "EFI_VOLUME_ID" "ADMIN_USER" "ADMIN_PASS")
+required_vars=("DISK1" "DISK2" "EFI_VOLUME_ID" "ADMIN_USER" "ADMIN_PASS" "TIMEZONE")
 missing_vars=()
 
 for var in "${required_vars[@]}"; do
@@ -2333,6 +2333,7 @@ chroot /mnt /usr/bin/env \
     EFI_VOLUME_ID="${EFI_VOLUME_ID}" \
     DEFAULT_INTERFACE="${DEFAULT_INTERFACE}" \
     TRIM_ENABLED="${TRIM_ENABLED}" \
+    TIMEZONE="${TIMEZONE}" \
     USE_SERIAL_CONSOLE="${USE_SERIAL_CONSOLE:-false}" \
     SERIAL_PORT="${SERIAL_PORT:-ttyS1}" \
     SERIAL_SPEED="${SERIAL_SPEED:-115200}" \
