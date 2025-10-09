@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.5.4"
+readonly VERSION="6.6.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2682,6 +2682,89 @@ if [[ ${INSTALL_COUNT} -eq 0 ]]; then
 fi
 
 log_info "GRUB sync complete (installed to ${INSTALL_COUNT} partition(s))"
+
+# Manage boot order: alternate between drives and ensure Ubuntu boots first
+log_info "Managing EFI boot order..."
+if ! command -v efibootmgr &>/dev/null; then
+    log_warning "  efibootmgr not available, skipping boot order management"
+else
+    # Get current boot order
+    CURRENT_ORDER=$(efibootmgr | grep "^BootOrder:" | cut -d: -f2 | tr -d ' ')
+
+    # Get all Ubuntu boot entries with their boot numbers
+    mapfile -t UBUNTU_BOOT_ENTRIES < <(efibootmgr | grep -i ubuntu | grep -oP '^Boot\K[0-9A-F]{4}')
+
+    if [[ ${#UBUNTU_BOOT_ENTRIES[@]} -eq 0 ]]; then
+        log_warning "  No Ubuntu boot entries found"
+    elif [[ ${#UBUNTU_BOOT_ENTRIES[@]} -eq 1 ]]; then
+        # Only one Ubuntu entry, just make sure it's first
+        OTHER_ENTRIES=$(echo "$CURRENT_ORDER" | tr ',' '\n' | grep -v "^${UBUNTU_BOOT_ENTRIES[0]}\$" | tr '\n' ',' | sed 's/,$//')
+        NEW_ORDER="${UBUNTU_BOOT_ENTRIES[0]}"
+        [[ -n "$OTHER_ENTRIES" ]] && NEW_ORDER="${NEW_ORDER},${OTHER_ENTRIES}"
+
+        if efibootmgr -o "$NEW_ORDER" >/dev/null 2>&1; then
+            log_info "  ✓ Boot order set: Ubuntu entry first"
+        else
+            log_warning "  Could not set boot order"
+        fi
+    else
+        # Multiple Ubuntu entries - alternate which one is first
+        # Find which Ubuntu entry is currently first in boot order
+        FIRST_UBUNTU=""
+        IFS=',' read -ra ORDER_ARRAY <<< "$CURRENT_ORDER"
+        for boot_num in "${ORDER_ARRAY[@]}"; do
+            for ubuntu_entry in "${UBUNTU_BOOT_ENTRIES[@]}"; do
+                if [[ "$boot_num" == "$ubuntu_entry" ]]; then
+                    FIRST_UBUNTU="$ubuntu_entry"
+                    break 2
+                fi
+            done
+        done
+
+        # Flip the order of Ubuntu entries
+        if [[ -n "$FIRST_UBUNTU" ]]; then
+            # Move first Ubuntu entry to end of Ubuntu entries
+            NEW_UBUNTU_ORDER=()
+            for entry in "${UBUNTU_BOOT_ENTRIES[@]}"; do
+                if [[ "$entry" != "$FIRST_UBUNTU" ]]; then
+                    NEW_UBUNTU_ORDER+=("$entry")
+                fi
+            done
+            NEW_UBUNTU_ORDER+=("$FIRST_UBUNTU")
+            log_info "  Rotating Ubuntu boot order: ${UBUNTU_BOOT_ENTRIES[*]} -> ${NEW_UBUNTU_ORDER[*]}"
+        else
+            # No Ubuntu entry was first, just use current Ubuntu order
+            NEW_UBUNTU_ORDER=("${UBUNTU_BOOT_ENTRIES[@]}")
+        fi
+
+        # Build new boot order: Ubuntu entries first (rotated), then everything else
+        OTHER_ENTRIES=""
+        for boot_num in "${ORDER_ARRAY[@]}"; do
+            IS_UBUNTU=false
+            for ubuntu_entry in "${UBUNTU_BOOT_ENTRIES[@]}"; do
+                if [[ "$boot_num" == "$ubuntu_entry" ]]; then
+                    IS_UBUNTU=true
+                    break
+                fi
+            done
+            if [[ "$IS_UBUNTU" == "false" ]]; then
+                [[ -n "$OTHER_ENTRIES" ]] && OTHER_ENTRIES="${OTHER_ENTRIES},"
+                OTHER_ENTRIES="${OTHER_ENTRIES}${boot_num}"
+            fi
+        done
+
+        NEW_ORDER=$(IFS=,; echo "${NEW_UBUNTU_ORDER[*]}")
+        [[ -n "$OTHER_ENTRIES" ]] && NEW_ORDER="${NEW_ORDER},${OTHER_ENTRIES}"
+
+        if efibootmgr -o "$NEW_ORDER" >/dev/null 2>&1; then
+            log_info "  ✓ Boot order updated: Ubuntu entries rotated and prioritized"
+        else
+            log_warning "  Could not set boot order"
+        fi
+    fi
+fi
+
+log_info "Boot synchronization and order management complete"
 GRUB_SYNC_SCRIPT
 
 chmod +x /mnt/usr/local/bin/sync-grub-to-mirror-drives
@@ -2756,11 +2839,12 @@ log_info "Kernel/initramfs hooks created (symlinked to /usr/local/bin/sync-mirro
 log_info "Creating shutdown sync service for final synchronization..."
 cat << 'SHUTDOWN_SERVICE' > /mnt/etc/systemd/system/zfs-mirror-shutdown-sync.service
 [Unit]
-Description=ZFS Mirror Boot Sync on Shutdown - Final synchronization before poweroff
+Description=ZFS Mirror Boot Sync on Shutdown - Final synchronization before poweroff/reboot
 Documentation=https://github.com/csmarshall/ubuntu-zfs-mirror
 DefaultDependencies=no
-Before=shutdown.target reboot.target halt.target
-After=umount.target
+Before=shutdown.target
+Conflicts=reboot.target halt.target poweroff.target kexec.target
+Before=reboot.target halt.target poweroff.target kexec.target
 
 [Service]
 Type=oneshot
@@ -2771,7 +2855,7 @@ StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=halt.target reboot.target shutdown.target
+WantedBy=shutdown.target
 SHUTDOWN_SERVICE
 
 chmod 644 /mnt/etc/systemd/system/zfs-mirror-shutdown-sync.service

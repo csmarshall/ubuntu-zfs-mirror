@@ -6,6 +6,8 @@ Enhanced version of the Ubuntu ZFS mirror root installation script with producti
 
 This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with full redundancy and automatic failover capability. Both drives will be bootable with UEFI support.
 
+**⚠️ INTENDED USE CASE**: This script is designed for **dedicated Ubuntu server installations** where Ubuntu is the only operating system. It is **NOT suitable for dual-boot or multi-boot setups** with Windows, other *nix/BSD systems, or other Linux distributions. The automatic boot order management prioritizes Ubuntu entries and may interfere with other operating systems.
+
 **KISS Implementation**: Following the "Keep It Simple and Stupid" principle, this script uses a straightforward single-pool architecture that eliminates complex dual-pool designs and cleanup procedures for maximum reliability and maintainability.
 
 **Based on the official [OpenZFS Ubuntu 22.04 Root on ZFS guide](https://openzfs.github.io/openzfs-docs/Getting%20Started/Ubuntu/Ubuntu%2022.04%20Root%20on%20ZFS.html)** with production enhancements, simplified architecture, and comprehensive validation capabilities.
@@ -345,36 +347,53 @@ zpool list
 zpool status rpool
 ```
 
-### UEFI Boot Order Configuration
+### Automatic Boot Order Management (v6.6.0+)
 
-**IMPORTANT**: For maximum redundancy, configure your UEFI boot order to alternate between drives:
+**NEW**: The system automatically manages EFI boot order to ensure redundancy and exercise both drives!
 
-**Recommended Boot Order:**
-1. **First boot device**: Drive 1 EFI partition (e.g., `Samsung-SSD-990-363M`)
-2. **Second boot device**: Drive 2 EFI partition (e.g., `Samsung-SSD-990-789N`)
-3. Other boot devices...
+**How Automatic Boot Order Works:**
+1. **Ubuntu entries prioritized**: System always boots Ubuntu first (no more EFI shell by default)
+2. **Automatic rotation**: Each GRUB sync rotates which drive boots first
+3. **Both drives tested**: Regular rotation ensures both bootloaders stay functional
+4. **Early failure detection**: If one drive's bootloader breaks, you'll find out immediately
+5. **Preserves other entries**: USB/network boot entries remain available (just lower priority)
 
-**Why this matters:**
-- If Drive 1 fails completely, the system automatically boots from Drive 2
-- Each drive has its own EFI partition with a complete GRUB installation
-- The script creates drive-specific UEFI folder names for easy identification
-- Alternating boot order ensures true redundancy with automatic failover
+**When Boot Order Updates:**
+- Kernel updates (via kernel post-install hook)
+- Initramfs updates (via initramfs post-update hook)
+- Manual `update-grub` command
+- Manual `/usr/local/bin/sync-grub-to-mirror-drives` execution
+- Shutdown/reboot (via shutdown sync service)
 
-**How to configure:**
+**Example Rotation:**
+```bash
+# After first install
+Boot Order: Boot0000 (Drive A), Boot0002 (Drive B), Boot0001 (EFI Shell)
+
+# After kernel update
+Boot Order: Boot0002 (Drive B), Boot0000 (Drive A), Boot0001 (EFI Shell)
+
+# After next kernel update
+Boot Order: Boot0000 (Drive A), Boot0002 (Drive B), Boot0001 (EFI Shell)
+```
+
+**Manual Configuration (Optional):**
+You can still manually configure boot order in UEFI if desired:
+
 1. Reboot and enter UEFI/BIOS setup (usually F2, F12, Del, or Esc during boot)
 2. Navigate to Boot Order or Boot Priority settings
-3. Look for Ubuntu entries with drive-specific names (e.g., `ubuntu` or the drive identifier)
-4. Set first boot device to one drive's EFI partition
-5. Set second boot device to the other drive's EFI partition
-6. Save settings and exit
+3. Look for Ubuntu entries with drive-specific names
+4. Arrange in desired order
 
-**Identifying drives in UEFI:**
-- The script creates unique EFI folder names based on drive model and serial
-- Use the drive identifier naming shown during installation
-- If drives appear identical, use the Smart EFI Naming identifiers documented above
+**Note**: Manual changes will be rotated on next GRUB sync. The automatic rotation ensures both drives are used regularly.
 
-**Testing failover:**
-After configuration, you can test automatic failover by simulating drive failure (see TROUBLESHOOTING.md for details).
+**USB/Network Boot:**
+- USB and network boot entries remain in boot order (lower priority than Ubuntu)
+- To boot from USB/network, use your BIOS boot menu (F12/F11/etc) to manually select
+- This prevents accidentally booting from a forgotten USB stick
+
+**Testing Failover:**
+After installation, test automatic failover by simulating drive failure (see TROUBLESHOOTING.md for details).
 
 ### Maintenance Commands
 ```bash
@@ -623,7 +642,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.5.4 - Documentation update
+- **Script Version**: 6.6.0 - Automatic boot order rotation and management
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

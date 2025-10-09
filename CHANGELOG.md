@@ -1,5 +1,62 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.6.0 - Automatic boot order rotation and management (2025-10-09)
+
+**Major Enhancement**
+
+Added intelligent EFI boot order management that automatically rotates between mirror drives and ensures Ubuntu boots first.
+
+**Why This Matters:**
+- **Exercise both drives**: Each GRUB update/kernel install rotates which drive boots first
+- **Early failure detection**: If one drive's bootloader breaks, you'll find out on next boot
+- **Ubuntu always first**: No more booting into EFI shell by default
+- **Preserves other entries**: USB/network boot entries remain in boot order (just lower priority)
+
+**How It Works:**
+1. After installing GRUB to all mirror drives, script reads current EFI boot order
+2. Identifies all Ubuntu boot entries (one per drive)
+3. Finds which Ubuntu entry is currently first
+4. Rotates Ubuntu entries (moves current first to last)
+5. Sets new boot order: rotated Ubuntu entries first, then all other entries
+
+**Example:**
+```
+Current order: Boot0000 (Drive A), Boot0002 (Drive B), Boot0001 (EFI Shell)
+New order:     Boot0002 (Drive B), Boot0000 (Drive A), Boot0001 (EFI Shell)
+Next sync:     Boot0000 (Drive A), Boot0002 (Drive B), Boot0001 (EFI Shell)
+```
+
+**User Impact:**
+- Both drives get boot tested regularly
+- System always boots Ubuntu by default (no manual selection needed)
+- USB/network boot still available via boot menu (F12/F11/etc)
+- Automatic load balancing of boot drive usage
+
+**Technical Details:**
+- Runs in `/usr/local/bin/sync-grub-to-mirror-drives`
+- Triggered on: kernel updates, initramfs updates, `update-grub`, manual sync
+- Uses `efibootmgr -o` to set boot order
+- Gracefully handles single-drive systems (just ensures Ubuntu is first)
+
+----
+
+## v6.5.5 - Fix shutdown sync service to run on reboot (2025-10-09)
+
+**Bug Fix**
+
+Fixed shutdown sync service to run on **all** shutdown transitions (reboot, halt, poweroff).
+
+**The Problem:**
+- Service was configured with `WantedBy=halt.target reboot.target shutdown.target`
+- Systemd doesn't always activate services from all these targets
+- Service failed to run on reboot: `[FAILED] Failed to start zfs-mirror-shutdown-sync`
+
+**The Solution:**
+- Changed to `WantedBy=shutdown.target` with proper `Before=` and `Conflicts=` directives
+- Service now runs on ALL shutdown transitions
+
+----
+
 ## v6.5.4 - Documentation update (2025-10-09)
 
 **Minor Update**
