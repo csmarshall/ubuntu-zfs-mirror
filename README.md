@@ -623,7 +623,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.5.2 - Critical: Device path to by-id resolution for drive naming
+- **Script Version**: 6.5.3 - Critical: Fix ((INSTALL_COUNT++)) with set -e
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.5.2"
+readonly VERSION="6.5.3"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2651,7 +2651,7 @@ for efi_part in "${EFI_PARTITIONS[@]}"; do
         log_info "  Installing to mounted partition..."
         if grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Ubuntu-${DRIVE_ID}" --recheck --no-floppy "$base_drive" >/dev/null 2>&1; then
             log_info "  ✓ GRUB installed to mounted partition"
-            ((INSTALL_COUNT++))
+            INSTALL_COUNT=$((INSTALL_COUNT + 1))
         else
             log_error "  ✗ Failed to install GRUB to mounted partition"
         fi
@@ -2664,7 +2664,7 @@ for efi_part in "${EFI_PARTITIONS[@]}"; do
             log_info "  Installing to $TEMP_MOUNT..."
             if grub-install --target=x86_64-efi --efi-directory="$TEMP_MOUNT" --bootloader-id="Ubuntu-${DRIVE_ID}" --recheck --no-floppy "$base_drive" >/dev/null 2>&1; then
                 log_info "  ✓ GRUB installed to $efi_part"
-                ((INSTALL_COUNT++))
+                INSTALL_COUNT=$((INSTALL_COUNT + 1))
             else
                 log_error "  ✗ Failed to install GRUB to $efi_part"
             fi

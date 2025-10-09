@@ -1,5 +1,33 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.5.3 - Critical: Fix ((INSTALL_COUNT++)) with set -e (2025-10-09)
+
+**Critical Bug Fix**
+
+Fixed script exit when installing GRUB to first drive with `set -euo pipefail`.
+
+**The Problem:**
+- `((INSTALL_COUNT++))` when `INSTALL_COUNT=0` returns exit code 1 (the pre-increment value is 0)
+- With `set -e`, any command returning non-zero causes script to exit
+- Script would install GRUB to first drive, then immediately exit
+- Second drive never got GRUB installed
+
+**The Solution:**
+- Changed `((INSTALL_COUNT++))` to `INSTALL_COUNT=$((INSTALL_COUNT + 1))`
+- Arithmetic expansion `$((...))` always returns exit code 0
+- Script now completes all GRUB installations
+
+**User Impact:**
+- Installation will now complete successfully on multi-drive setups
+- Both/all drives get GRUB installed
+- This was blocking all installations from completing!
+
+**Testing:**
+- Fixed in both main script and test script
+- Verified with `bash -x` trace showing early exit
+
+----
+
 ## v6.5.2 - Critical: Device path to by-id resolution for drive naming (2025-10-09)
 
 **Critical Bug Fix**
