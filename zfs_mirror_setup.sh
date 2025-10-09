@@ -3,7 +3,6 @@
 # Ubuntu 24.04 ZFS Root Installation Script - Enhanced & Cleaned Version
 # Creates a ZFS mirror on two drives with full redundancy
 # Supports: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
-# Version: 6.3.2 - Fixed service enablement timing validation
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
@@ -11,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.5.0"
+readonly VERSION="6.5.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2591,11 +2590,12 @@ declare -A PARTITION_TO_DRIVE
 for efi_part in "${EFI_PARTITIONS[@]}"; do
     # EFI partition is typically -part1, base drive is without -partN
     if [[ "$efi_part" =~ ^(.+)-part[0-9]+$ ]]; then
+        # /dev/disk/by-id/ata-DISK123-part1 -> /dev/disk/by-id/ata-DISK123
         base_drive="${BASH_REMATCH[1]}"
         PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
         log_info "  Mapped: $efi_part -> $base_drive"
-    elif [[ "$efi_part" =~ ^(/dev/[^0-9]+)[0-9]+$ ]]; then
-        # Handle /dev/nvme0n1p1 -> /dev/nvme0n1 style
+    elif [[ "$efi_part" =~ ^(.+)p[0-9]+$ ]]; then
+        # /dev/nvme0n1p1 -> /dev/nvme0n1
         base_drive="${BASH_REMATCH[1]}"
         PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
         log_info "  Mapped: $efi_part -> $base_drive"
@@ -2718,6 +2718,9 @@ log_info "GRUB hook created: /etc/grub.d/99-zfs-mirror-sync"
 log_info "Creating kernel and initramfs hooks..."
 ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/kernel/postinst.d/zz-sync-mirror-boot
 ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/kernel/postrm.d/zz-sync-mirror-boot
+
+# Create initramfs hook directory if it doesn't exist
+mkdir -p /mnt/etc/initramfs/post-update.d
 ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/initramfs/post-update.d/zz-sync-mirror-boot
 log_info "Kernel/initramfs hooks created (symlinked to /usr/local/bin/sync-mirror-boot)"
 

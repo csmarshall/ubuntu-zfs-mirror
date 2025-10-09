@@ -1,5 +1,27 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.5.1 - Bugfix: NVMe partition regex and initramfs directory (2025-10-09)
+
+**Critical Bug Fixes**
+
+Fixed two issues preventing installation on NVMe drives:
+
+**Issue 1: NVMe partition regex was broken**
+- Old regex: `^(/dev/[^0-9]+)[0-9]+$` tried to match `/dev/nvme0n1p1` as `/dev/nvme` + `0n1p1` (WRONG!)
+- New regex: `^(.+)p[0-9]+$` correctly matches `/dev/nvme0n1p1` as `/dev/nvme0n1` + `p1`
+- Fixed mapping for all NVMe partition naming (nvme0n1p1, nvme1n1p1, etc.)
+
+**Issue 2: Missing initramfs hook directory**
+- `/etc/initramfs/post-update.d/` doesn't exist by default
+- Added `mkdir -p /mnt/etc/initramfs/post-update.d` before creating symlink
+- Prevents ln failure during hook creation
+
+**User Impact:**
+- Installation now works on NVMe drives
+- All hooks are created successfully
+
+----
+
 ## v6.5.0 - Belt-and-suspenders shutdown sync service (2025-10-09)
 
 **Enhancement - Final Sync on Shutdown/Reboot**

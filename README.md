@@ -623,7 +623,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.5.0 - Belt-and-suspenders shutdown sync service
+- **Script Version**: 6.5.1 - Bugfix: NVMe partition regex and initramfs directory
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
