@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.4.1"
+readonly VERSION="6.5.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2720,6 +2720,32 @@ ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/kernel/postinst.d/zz-sync-mirror
 ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/kernel/postrm.d/zz-sync-mirror-boot
 ln -sf /usr/local/bin/sync-mirror-boot /mnt/etc/initramfs/post-update.d/zz-sync-mirror-boot
 log_info "Kernel/initramfs hooks created (symlinked to /usr/local/bin/sync-mirror-boot)"
+
+# Create shutdown sync service (belt-and-suspenders final sync before poweroff)
+log_info "Creating shutdown sync service for final synchronization..."
+cat << 'SHUTDOWN_SERVICE' > /mnt/etc/systemd/system/zfs-mirror-shutdown-sync.service
+[Unit]
+Description=ZFS Mirror Boot Sync on Shutdown - Final synchronization before poweroff
+Documentation=https://github.com/csmarshall/ubuntu-zfs-mirror
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
+After=umount.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sync-mirror-boot
+RemainAfterExit=yes
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=halt.target reboot.target shutdown.target
+SHUTDOWN_SERVICE
+
+chmod 644 /mnt/etc/systemd/system/zfs-mirror-shutdown-sync.service
+chroot /mnt systemctl enable zfs-mirror-shutdown-sync.service
+log_info "Shutdown sync service created and enabled"
 
 # Remove old APT hook (replaced by grub.d and kernel hooks)
 if [[ -f /mnt/etc/apt/apt.conf.d/99-sync-efi ]]; then

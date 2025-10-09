@@ -1,5 +1,51 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.5.0 - Belt-and-suspenders shutdown sync service (2025-10-09)
+
+**Enhancement - Final Sync on Shutdown/Reboot**
+
+Added systemd service that performs final GRUB/EFI synchronization before shutdown or reboot.
+
+**Why This Matters:**
+- **Belt-and-suspenders safety net** - Ensures drives are in sync even if hooks missed something
+- **Catches edge cases** - Manual file copies, firmware updates, or unusual modifications
+- **Peace of mind** - Final guarantee before power-off
+
+**Implementation:**
+- Created `zfs-mirror-shutdown-sync.service`
+- Runs `/usr/local/bin/sync-mirror-boot` before shutdown/reboot/halt
+- 60-second timeout (should complete in ~10-15 seconds for 2 drives)
+- Logs to journal for debugging
+- Enabled automatically during installation
+
+**Service Order:**
+```
+shutdown.target/reboot.target/halt.target
+    ↑
+    | (Before)
+    |
+zfs-mirror-shutdown-sync.service
+    |
+    | (After)
+    ↓
+umount.target
+```
+
+**User Impact:**
+- Adds ~10-15 seconds to shutdown/reboot time
+- Guarantees all mirror drives are synchronized before poweroff
+- No manual intervention needed
+- Visible in journal: `journalctl -u zfs-mirror-shutdown-sync`
+
+**Coverage Summary (All Sync Points):**
+- ✅ Kernel updates → kernel hooks
+- ✅ Initramfs updates → initramfs hook
+- ✅ Manual update-grub → grub.d hook
+- ✅ GRUB package updates → kernel hooks
+- ✅ **NEW: Shutdown/reboot → shutdown service**
+
+----
+
 ## v6.4.1 - Bugfix: Unbound variable in GRUB sync (2025-10-08)
 
 **Critical Bug Fix**

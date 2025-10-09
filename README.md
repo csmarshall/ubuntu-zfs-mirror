@@ -623,7 +623,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.4.1 - Bugfix: Unbound variable in GRUB sync
+- **Script Version**: 6.5.0 - Belt-and-suspenders shutdown sync service
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
@@ -744,6 +744,24 @@ Each drive has its own EFI partition with its own drive-specific bootloader fold
 - ✅ Kernel removals → `/etc/kernel/postrm.d/zz-sync-mirror-boot`
 - ✅ Initramfs updates → `/etc/initramfs/post-update.d/zz-sync-mirror-boot`
 - ✅ Manual update-grub → `/etc/grub.d/99-zfs-mirror-sync`
+- ✅ **Shutdown/Reboot → `zfs-mirror-shutdown-sync.service`** (belt-and-suspenders final sync)
+
+**Shutdown Sync Service:**
+
+A systemd service runs before every shutdown or reboot to ensure final synchronization:
+
+```bash
+# View service status
+systemctl status zfs-mirror-shutdown-sync
+
+# View shutdown sync logs
+journalctl -u zfs-mirror-shutdown-sync
+
+# Disable if you want faster shutdowns (not recommended)
+sudo systemctl disable zfs-mirror-shutdown-sync.service
+```
+
+This adds ~10-15 seconds to shutdown/reboot time but guarantees all drives are synchronized before poweroff, catching any edge cases the hooks might have missed.
 
 ### Manual Sync Commands
 
