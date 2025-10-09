@@ -1,5 +1,17 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.5.4 - Documentation update (2025-10-09)
+
+**Minor Update**
+
+Version bump for consistency. No functional changes to main script.
+
+**Test Script Note:**
+- Test script updated to fix chroot temp mount path issue
+- Test script is not included in repository
+
+----
+
 ## v6.5.3 - Critical: Fix ((INSTALL_COUNT++)) with set -e (2025-10-09)
 
 **Critical Bug Fix**
