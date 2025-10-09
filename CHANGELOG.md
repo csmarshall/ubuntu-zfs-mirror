@@ -1,5 +1,27 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.4.1 - Bugfix: Unbound variable in GRUB sync (2025-10-08)
+
+**Critical Bug Fix**
+
+Fixed unbound variable error in sync-grub-to-mirror-drives when EFI partition names don't match expected patterns.
+
+**The Issue:**
+- Line 2608: `base_drive="${PARTITION_TO_DRIVE[$efi_part]}"` failed with "unbound variable" error
+- Occurred when partition name doesn't match `-partN` or NVMe patterns
+- Script has `set -euo pipefail` which is strict about unbound variables
+
+**The Fix:**
+- Changed to `base_drive="${PARTITION_TO_DRIVE[$efi_part]:-}"` (provides empty default)
+- Added logging to show partition->drive mapping during sync
+- Added warning when partition name can't be parsed
+
+**User Impact:**
+- Installation no longer fails on sync-grub-to-mirror-drives
+- Better error messages for debugging partition name issues
+
+----
+
 ## v6.4.0 - Fixed EFI architecture for proper drive-specific partitions (2025-10-08)
 
 **CRITICAL ARCHITECTURE FIX - Proper EFI Partition Management**

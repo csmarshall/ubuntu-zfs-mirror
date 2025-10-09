@@ -623,7 +623,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.4.0 - Fixed EFI architecture for proper drive-specific partitions
+- **Script Version**: 6.4.1 - Bugfix: Unbound variable in GRUB sync
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com

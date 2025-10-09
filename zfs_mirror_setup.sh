@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.4.0"
+readonly VERSION="6.4.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2593,10 +2593,14 @@ for efi_part in "${EFI_PARTITIONS[@]}"; do
     if [[ "$efi_part" =~ ^(.+)-part[0-9]+$ ]]; then
         base_drive="${BASH_REMATCH[1]}"
         PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
+        log_info "  Mapped: $efi_part -> $base_drive"
     elif [[ "$efi_part" =~ ^(/dev/[^0-9]+)[0-9]+$ ]]; then
         # Handle /dev/nvme0n1p1 -> /dev/nvme0n1 style
         base_drive="${BASH_REMATCH[1]}"
         PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
+        log_info "  Mapped: $efi_part -> $base_drive"
+    else
+        log_warning "  Could not parse partition name: $efi_part (will skip during install)"
     fi
 done
 
@@ -2605,7 +2609,7 @@ log_info "Found ${#EFI_PARTITIONS[@]} EFI partition(s) to sync"
 # Process each EFI partition
 INSTALL_COUNT=0
 for efi_part in "${EFI_PARTITIONS[@]}"; do
-    base_drive="${PARTITION_TO_DRIVE[$efi_part]}"
+    base_drive="${PARTITION_TO_DRIVE[$efi_part]:-}"
     if [[ -z "$base_drive" ]]; then
         log_warning "Could not determine base drive for $efi_part, skipping"
         continue
