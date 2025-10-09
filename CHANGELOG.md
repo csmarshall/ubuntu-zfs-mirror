@@ -1,5 +1,40 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.5.2 - Critical: Device path to by-id resolution for drive naming (2025-10-09)
+
+**Critical Bug Fix**
+
+Fixed drive identifier logic to preserve smart naming on NVMe drives.
+
+**The Problem:**
+- `blkid` returns device paths like `/dev/nvme0n1p1`, not by-id paths
+- After parsing to get base drive `/dev/nvme0n1`, `get_drive_identifier()` couldn't extract model/serial
+- Result: EFI folders named `Ubuntu-Disk-e0n1` instead of `Ubuntu-Samsung-SSD-990-363M`
+
+**The Solution:**
+- Added device path to by-id path resolution loop
+- Finds which `/dev/disk/by-id/nvme-...` symlink points to `/dev/nvme0n1`
+- Uses the by-id path for drive identifier extraction
+- Preserves smart naming: model name + last 4 chars of serial
+
+**Code Flow:**
+1. `blkid` returns `/dev/nvme0n1p1`
+2. Parse to get device base: `/dev/nvme0n1`
+3. Loop through `/dev/disk/by-id/*` to find symlink pointing to device
+4. Use by-id path like `/dev/disk/by-id/nvme-Samsung_SSD_990_PRO_2TB_S73VNJ0W363950M`
+5. Extract identifier: `Samsung-SSD-990-363M`
+
+**User Impact:**
+- EFI bootloader folders now have meaningful, drive-specific names
+- Each drive gets unique identifier based on actual hardware
+- Proper redundancy with identifiable boot entries
+
+**Testing:**
+- Created `test_finish_installation.sh` to validate GRUB sync logic
+- Added device-to-by-id resolution to both main script and test script
+
+----
+
 ## v6.5.1 - Bugfix: NVMe partition regex and initramfs directory (2025-10-09)
 
 **Critical Bug Fixes**

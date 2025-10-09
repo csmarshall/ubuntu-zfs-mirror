@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.5.1"
+readonly VERSION="6.5.2"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2588,19 +2588,47 @@ fi
 # Build map of EFI partition -> base drive
 declare -A PARTITION_TO_DRIVE
 for efi_part in "${EFI_PARTITIONS[@]}"; do
-    # EFI partition is typically -part1, base drive is without -partN
+    base_drive=""
+
     if [[ "$efi_part" =~ ^(.+)-part[0-9]+$ ]]; then
-        # /dev/disk/by-id/ata-DISK123-part1 -> /dev/disk/by-id/ata-DISK123
+        # Already a by-id path: /dev/disk/by-id/ata-DISK123-part1
         base_drive="${BASH_REMATCH[1]}"
-        PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
         log_info "  Mapped: $efi_part -> $base_drive"
     elif [[ "$efi_part" =~ ^(.+)p[0-9]+$ ]]; then
-        # /dev/nvme0n1p1 -> /dev/nvme0n1
-        base_drive="${BASH_REMATCH[1]}"
-        PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
+        # Device path: /dev/nvme0n1p1 -> need to find by-id equivalent
+        device_base="${BASH_REMATCH[1]}"
+
+        # Find the by-id link that points to this device base
+        by_id_path=""
+        for link in /dev/disk/by-id/*; do
+            # Skip partition links
+            [[ "$link" =~ -part[0-9]+$ ]] && continue
+            [[ "$link" =~ p[0-9]+$ ]] && continue
+
+            # Check if this link points to our device
+            if [[ -L "$link" ]]; then
+                target=$(readlink -f "$link")
+                if [[ "$target" == "$device_base" ]]; then
+                    by_id_path="$link"
+                    break
+                fi
+            fi
+        done
+
+        if [[ -n "$by_id_path" ]]; then
+            base_drive="$by_id_path"
+            log_info "  Resolved: $efi_part -> $device_base -> $base_drive"
+        else
+            log_warning "  Could not find by-id path for $device_base, using device path"
+            base_drive="$device_base"
+        fi
         log_info "  Mapped: $efi_part -> $base_drive"
     else
         log_warning "  Could not parse partition name: $efi_part (will skip during install)"
+    fi
+
+    if [[ -n "$base_drive" ]]; then
+        PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
     fi
 done
 
