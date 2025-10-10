@@ -1,5 +1,63 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.9.2 - Add boot entry creation/validation to sync-mirror-boot (2025-10-10)
+
+**Critical Feature Addition - Self-Healing Boot Entries**
+
+Added automatic boot entry creation and validation to `sync-mirror-boot`, making the system self-healing and resilient to boot entry corruption or deletion.
+
+**The Problem:**
+- Installation created broken boot entries (VenHw instead of HD paths)
+- Three-entry boot menu was never properly created
+- Shutdown rotation couldn't run without valid entries
+- No way to recover from accidental entry deletion
+- Fresh installations had no working boot menu
+
+**The Solution:**
+- Added Step 2 to `sync-mirror-boot`: "Ensure three-entry boot menu exists"
+- Runs in BOTH normal and shutdown modes (before rotation)
+- Discovers drives from zpool automatically
+- Checks for existing valid entries (HD paths, not VenHw)
+- Removes broken entries (VenHw entries)
+- Creates missing entries with proper HD paths
+- Sets correct boot order
+- Self-healing: recreates entries if deleted or corrupted
+
+**How It Works:**
+
+**Step 2 (runs every time):**
+1. Discover both drives from `zpool status rpool`
+2. Get PARTUUIDs and labels for both drives
+3. Check existing boot entries for validity:
+   - Must be HD(...) path, not VenHw(...)
+   - Must match expected labels
+4. Remove broken entries (VenHw)
+5. Create missing entries:
+   - Ubuntu - Rotating (DriveX)
+   - Ubuntu - Drive1Name
+   - Ubuntu - Drive2Name
+6. Set boot order: rotating, static1, static2, others
+
+**Step 3 (shutdown mode only):**
+- Rotate the rotating entry to other drive
+- Clean up unexpected/old entries
+
+**User Impact:**
+- **Fresh installations**: Now get proper three-entry boot menu
+- **Existing installations**: Run `sudo /usr/local/bin/sync-mirror-boot` to fix
+- **Self-healing**: Automatically recovers from entry deletion
+- **Resilient**: Survives UEFI resets, firmware updates
+- **No manual intervention**: Everything automatic
+
+**Files Modified:**
+- `zfs_mirror_setup.sh`: Added boot entry creation/validation logic to sync-mirror-boot
+
+**Testing:**
+- Run `sudo /usr/local/bin/sync-mirror-boot` on rosa to fix existing installation
+- Check `efibootmgr` output for proper HD paths and three entries
+
+----
+
 ## v6.9.1 - Fix arithmetic expression bug in boot entry cleanup (2025-10-10)
 
 **Critical Bug Fix**

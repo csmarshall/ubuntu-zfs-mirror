@@ -60,7 +60,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.9.1"
+readonly VERSION="6.9.2"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -3035,14 +3035,196 @@ else
     exit 1
 fi
 
-# Step 2: Rotate boot entry if in shutdown mode
+# Step 2: Ensure three-entry boot menu exists (runs in both modes)
+log_info "Ensuring three-entry boot menu exists..."
+
+if ! command -v efibootmgr &>/dev/null; then
+    log_warning "efibootmgr not available, skipping boot entry management"
+    log_info "=== ZFS Mirror Boot Sync Completed Successfully ==="
+    exit 0
+fi
+
+# Discover drives from rpool
+mapfile -t RPOOL_DRIVES < <(zpool status rpool 2>/dev/null | grep -E "^\\s+.*-part3\\s+ONLINE" | awk '{print \$1}' | sed 's/-part3\$//' | sed 's|^|/dev/disk/by-id/|')
+
+if [[ \${#RPOOL_DRIVES[@]} -ne 2 ]]; then
+    log_warning "Expected 2 drives in rpool, found \${#RPOOL_DRIVES[@]}, skipping boot entry management"
+    log_info "=== ZFS Mirror Boot Sync Completed Successfully ==="
+    exit 0
+fi
+
+# Get PARTUUIDs and labels for both drives
+EFI_UUID=\$(awk '/\\/boot\\/efi/ && /^UUID=/ {gsub(/UUID=/, "", \$1); print \$1}' /etc/fstab 2>/dev/null || echo "")
+if [[ -z "\$EFI_UUID" ]]; then
+    log_error "Could not find EFI UUID in fstab"
+    exit 1
+fi
+
+PARTUUID1=\$(blkid -s PARTUUID -o value "\${RPOOL_DRIVES[0]}-part1" 2>/dev/null || echo "")
+PARTUUID2=\$(blkid -s PARTUUID -o value "\${RPOOL_DRIVES[1]}-part1" 2>/dev/null || echo "")
+
+if [[ -z "\$PARTUUID1" ]] || [[ -z "\$PARTUUID2" ]]; then
+    log_error "Could not determine drive PARTUUIDs"
+    exit 1
+fi
+
+# Get drive labels
+LABEL1=""
+LABEL2=""
+for idx in 0 1; do
+    partuuid=\$(blkid -s PARTUUID -o value "\${RPOOL_DRIVES[\$idx]}-part1" 2>/dev/null || echo "")
+    if [[ -n "\$partuuid" ]]; then
+        efi_part=\$(blkid --output device --match-token UUID="\$EFI_UUID" --match-token PARTUUID="\$partuuid" 2>/dev/null | head -1)
+        if [[ -n "\$efi_part" ]]; then
+            temp_mount=\$(mktemp -d)
+            if mount "\$efi_part" "\$temp_mount" 2>/dev/null; then
+                label=\$(find "\$temp_mount/EFI/" -maxdepth 1 -name "Ubuntu-*" -type d 2>/dev/null | head -1 | xargs -r basename)
+                if [[ -n "\$label" ]]; then
+                    if [[ \$idx -eq 0 ]]; then
+                        LABEL1="\$label"
+                    else
+                        LABEL2="\$label"
+                    fi
+                fi
+                umount "\$temp_mount"
+            fi
+            rmdir "\$temp_mount" 2>/dev/null || true
+        fi
+    fi
+done
+
+if [[ -z "\$LABEL1" ]] || [[ -z "\$LABEL2" ]]; then
+    log_error "Could not determine drive labels"
+    exit 1
+fi
+
+log_info "  Drive 1: \$LABEL1 (PARTUUID: \$PARTUUID1)"
+log_info "  Drive 2: \$LABEL2 (PARTUUID: \$PARTUUID2)"
+
+# Check for existing valid entries
+ROTATING_ENTRY=""
+STATIC1_ENTRY=""
+STATIC2_ENTRY=""
+
+while IFS= read -r line; do
+    if [[ "\$line" =~ ^Boot([0-9A-F]{4})\\*.*Ubuntu[[:space:]]-[[:space:]]Rotating ]]; then
+        boot_num="\${BASH_REMATCH[1]}"
+        # Check if it's a valid HD entry (not VenHw)
+        if [[ "\$line" =~ HD\\( ]]; then
+            ROTATING_ENTRY="\$boot_num"
+        else
+            log_info "  Removing broken rotating entry: Boot\$boot_num (VenHw)"
+            efibootmgr -b "\$boot_num" -B >/dev/null 2>&1 || true
+        fi
+    elif [[ "\$line" =~ ^Boot([0-9A-F]{4})\\*.*Ubuntu[[:space:]]-[[:space:]]\${LABEL1}\$ ]]; then
+        boot_num="\${BASH_REMATCH[1]}"
+        if [[ "\$line" =~ HD\\( ]]; then
+            STATIC1_ENTRY="\$boot_num"
+        else
+            log_info "  Removing broken static entry: Boot\$boot_num (VenHw)"
+            efibootmgr -b "\$boot_num" -B >/dev/null 2>&1 || true
+        fi
+    elif [[ "\$line" =~ ^Boot([0-9A-F]{4})\\*.*Ubuntu[[:space:]]-[[:space:]]\${LABEL2}\$ ]]; then
+        boot_num="\${BASH_REMATCH[1]}"
+        if [[ "\$line" =~ HD\\( ]]; then
+            STATIC2_ENTRY="\$boot_num"
+        else
+            log_info "  Removing broken static entry: Boot\$boot_num (VenHw)"
+            efibootmgr -b "\$boot_num" -B >/dev/null 2>&1 || true
+        fi
+    fi
+done < <(efibootmgr 2>/dev/null)
+
+# Create missing entries
+if [[ -z "\$ROTATING_ENTRY" ]]; then
+    log_info "  Creating rotating entry: Ubuntu - Rotating (\$LABEL1)"
+    if efibootmgr --create --gpt \\
+        --disk "\${RPOOL_DRIVES[0]}" \\
+        --part 1 \\
+        --loader "\\\\EFI\\\\\${LABEL1}\\\\shimx64.efi" \\
+        --label "Ubuntu - Rotating (\$LABEL1)" \\
+        >/dev/null 2>&1; then
+        # Find the newly created entry
+        while IFS= read -r line; do
+            if [[ "\$line" =~ ^Boot([0-9A-F]{4})\\*.*Ubuntu[[:space:]]-[[:space:]]Rotating ]]; then
+                ROTATING_ENTRY="\${BASH_REMATCH[1]}"
+                break
+            fi
+        done < <(efibootmgr 2>/dev/null)
+        log_info "    Created: Boot\$ROTATING_ENTRY"
+    else
+        log_warning "  Failed to create rotating entry"
+    fi
+fi
+
+if [[ -z "\$STATIC1_ENTRY" ]]; then
+    log_info "  Creating static entry: Ubuntu - \$LABEL1"
+    if efibootmgr --create --gpt \\
+        --disk "\${RPOOL_DRIVES[0]}" \\
+        --part 1 \\
+        --loader "\\\\EFI\\\\\${LABEL1}\\\\shimx64.efi" \\
+        --label "Ubuntu - \$LABEL1" \\
+        >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            if [[ "\$line" =~ ^Boot([0-9A-F]{4})\\*.*Ubuntu[[:space:]]-[[:space:]]\${LABEL1}\$ ]]; then
+                STATIC1_ENTRY="\${BASH_REMATCH[1]}"
+                break
+            fi
+        done < <(efibootmgr 2>/dev/null)
+        log_info "    Created: Boot\$STATIC1_ENTRY"
+    else
+        log_warning "  Failed to create static entry for \$LABEL1"
+    fi
+fi
+
+if [[ -z "\$STATIC2_ENTRY" ]]; then
+    log_info "  Creating static entry: Ubuntu - \$LABEL2"
+    if efibootmgr --create --gpt \\
+        --disk "\${RPOOL_DRIVES[1]}" \\
+        --part 1 \\
+        --loader "\\\\EFI\\\\\${LABEL2}\\\\shimx64.efi" \\
+        --label "Ubuntu - \$LABEL2" \\
+        >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            if [[ "\$line" =~ ^Boot([0-9A-F]{4})\\*.*Ubuntu[[:space:]]-[[:space:]]\${LABEL2}\$ ]]; then
+                STATIC2_ENTRY="\${BASH_REMATCH[1]}"
+                break
+            fi
+        done < <(efibootmgr 2>/dev/null)
+        log_info "    Created: Boot\$STATIC2_ENTRY"
+    else
+        log_warning "  Failed to create static entry for \$LABEL2"
+    fi
+fi
+
+# Set boot order if entries exist
+if [[ -n "\$ROTATING_ENTRY" ]] && [[ -n "\$STATIC1_ENTRY" ]] && [[ -n "\$STATIC2_ENTRY" ]]; then
+    # Get current boot order
+    CURRENT_ORDER=\$(efibootmgr | grep "^BootOrder:" | cut -d: -f2 | tr -d ' ')
+
+    # Build new order: rotating, static1, static2, then others
+    NEW_ORDER="\$ROTATING_ENTRY,\$STATIC1_ENTRY,\$STATIC2_ENTRY"
+
+    # Add non-Ubuntu entries
+    IFS=',' read -ra ORDER_ARRAY <<< "\$CURRENT_ORDER"
+    for boot_num in "\${ORDER_ARRAY[@]}"; do
+        if [[ "\$boot_num" != "\$ROTATING_ENTRY" ]] && \\
+           [[ "\$boot_num" != "\$STATIC1_ENTRY" ]] && \\
+           [[ "\$boot_num" != "\$STATIC2_ENTRY" ]]; then
+            NEW_ORDER="\$NEW_ORDER,\$boot_num"
+        fi
+    done
+
+    if efibootmgr -o "\$NEW_ORDER" >/dev/null 2>&1; then
+        log_info "  ✓ Boot order set: \$NEW_ORDER"
+    else
+        log_warning "  Failed to set boot order"
+    fi
+fi
+
+# Step 3: Rotate boot entry if in shutdown mode
 if [[ "\$SHUTDOWN_MODE" == "true" ]]; then
     log_info "Rotating boot entry for next boot..."
-
-    if ! command -v efibootmgr &>/dev/null; then
-        log_warning "efibootmgr not available, skipping boot entry rotation"
-        exit 0
-    fi
 
     # Find all EFI partitions from rpool
     mapfile -t RPOOL_DRIVES < <(zpool status rpool 2>/dev/null | grep -E "^\\s+.*-part3\\s+ONLINE" | awk '{print \$1}' | sed 's/-part3\$//' | sed 's|^|/dev/disk/by-id/|')
