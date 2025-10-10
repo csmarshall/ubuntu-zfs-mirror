@@ -1,5 +1,45 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.8.4 - Fix heredoc variable escaping in generated scripts (2025-10-10)
+
+**Critical Bug Fix**
+
+Fixed unbound variable errors when creating runtime scripts via heredocs, and added comprehensive documentation to prevent future occurrences.
+
+**The Problem:**
+- The main script uses `set -u` (unbound variables cause errors)
+- Generated scripts (sync-efi-partitions, sync-grub-to-mirror-drives, test-zfs-mirror, etc.) are created via heredocs
+- Heredocs attempted to expand variables like `$1`, `$status`, `$EFI_UUID` during script *creation*
+- These variables should only be expanded when the generated scripts *run*, not during creation
+- Result: Script creation failed with "unbound variable" errors, scripts were never created
+
+**The Solution:**
+- Escaped ALL runtime variables in heredocs with backslash: `\$variable` and `\${variable}`
+- Left only installer metadata variables unescaped: `${VERSION}`, `${ORIGINAL_REPO}`, `$(date)` in headers
+- Fixed 5 generated scripts:
+  1. `/usr/local/bin/sync-efi-partitions` - EFI partition sync
+  2. `/usr/local/bin/test-zfs-mirror` - Post-install testing
+  3. `/usr/local/bin/sync-grub-to-mirror-drives` - GRUB installation to all drives
+  4. `/usr/local/bin/sync-mirror-boot` - Unified boot sync wrapper
+  5. `/usr/local/bin/replace-drive-in-zfs-boot-mirror` - Drive replacement
+- Added comprehensive header documentation (lines 10-37) explaining:
+  - Why escaping is necessary
+  - Which variables to escape vs. expand
+  - Pattern for adding new heredoc scripts
+
+**Prevention for Future:**
+- Clear documentation at top of script explaining heredoc escaping rules
+- Examples showing correct pattern
+- Guidance on which variables need escaping vs. expansion
+
+**User Impact:**
+- Installation now completes successfully
+- All runtime scripts are properly created
+- Scripts function correctly after installation
+- Future contributors have clear guidance on heredoc best practices
+
+----
+
 ## v6.8.3 - Add chroot environment validation and fix missing exports (2025-10-10)
 
 **Critical Bug Fix + Prevention**

@@ -6,11 +6,40 @@
 # License: MIT
 # Original Repository: https://github.com/csmarshall/ubuntu-zfs-mirror
 # Enhanced Version: https://claude.ai - Production-ready fixes
+#
+# ============================================================================
+# IMPORTANT: Heredoc Variable Escaping
+# ============================================================================
+# This script creates several runtime scripts via heredocs. Because the main
+# script uses `set -u` (unbound variables cause errors), ALL variables in
+# heredocs that should be evaluated WHEN THE SCRIPT RUNS (not during creation)
+# must be escaped with backslash: \$variable or \${variable}
+#
+# Variables that SHOULD be expanded during creation (installer metadata):
+#   - ${VERSION} - Script version number
+#   - ${ORIGINAL_REPO} - Repository URL
+#   - $(date '+...') - In comment headers only
+#
+# Variables that MUST be escaped (runtime evaluation):
+#   - Function arguments: \$1, \$2, etc.
+#   - Local variables: \$status, \$EFI_UUID, etc.
+#   - Command substitutions: \$(command)
+#   - Array operations: \${#array[@]}, \${array[0]}, etc.
+#   - Parameter expansion: \${var:-default}, \${var//search/replace}, etc.
+#
+# When adding new heredoc scripts, use this pattern:
+#   cat << MARKER > /path/to/script
+#   #!/bin/bash
+#   # Header comments can use ${VERSION} and ${ORIGINAL_REPO}
+#   local my_var="\$1"  # Escape runtime variables
+#   echo "\${my_var}"   # Escape all runtime expansions
+#   MARKER
+# ============================================================================
 
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.8.3"
+readonly VERSION="6.8.4"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -1467,95 +1496,95 @@ log_message() {
 }
 
 # Get EFI UUID from fstab
-EFI_UUID=$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", $1); print $1}' /etc/fstab 2>/dev/null || echo "")
+EFI_UUID=\$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", \$1); print \$1}' /etc/fstab 2>/dev/null || echo "")
 
-if [[ -z "${EFI_UUID}" ]]; then
+if [[ -z "\${EFI_UUID}" ]]; then
     log_message "ERROR: Could not find EFI UUID in fstab"
     exit 1
 fi
 
 # Get the currently mounted EFI partition (this is our source)
-MOUNTED_EFI=$(mount | grep '/boot/efi' | awk '{print $1}')
+MOUNTED_EFI=\$(mount | grep '/boot/efi' | awk '{print \$1}')
 
-if [[ -z "${MOUNTED_EFI}" ]]; then
+if [[ -z "\${MOUNTED_EFI}" ]]; then
     log_message "ERROR: No EFI partition currently mounted at /boot/efi"
     exit 1
 fi
 
 # Find all partitions with this UUID
-mapfile -t EFI_PARTITIONS < <(blkid --output device --match-token UUID="${EFI_UUID}" 2>/dev/null || true)
+mapfile -t EFI_PARTITIONS < <(blkid --output device --match-token UUID="\${EFI_UUID}" 2>/dev/null || true)
 
-if [[ ${#EFI_PARTITIONS[@]} -lt 2 ]]; then
-    log_message "WARNING: Only ${#EFI_PARTITIONS[@]} EFI partition(s) found, expected 2+"
+if [[ \${#EFI_PARTITIONS[@]} -lt 2 ]]; then
+    log_message "WARNING: Only \${#EFI_PARTITIONS[@]} EFI partition(s) found, expected 2+"
     exit 0
 fi
 
 # Find source Ubuntu folder on mounted partition
-SOURCE_UBUNTU_FOLDER=$(find /boot/efi/EFI/ -maxdepth 1 -name "Ubuntu-*" -type d 2>/dev/null | head -1)
-if [[ -z "${SOURCE_UBUNTU_FOLDER}" ]]; then
+SOURCE_UBUNTU_FOLDER=\$(find /boot/efi/EFI/ -maxdepth 1 -name "Ubuntu-*" -type d 2>/dev/null | head -1)
+if [[ -z "\${SOURCE_UBUNTU_FOLDER}" ]]; then
     log_message "ERROR: No Ubuntu-* folder found in mounted EFI partition"
     exit 1
 fi
 
-SOURCE_FOLDER_NAME=$(basename "${SOURCE_UBUNTU_FOLDER}")
-log_message "Source folder: ${SOURCE_FOLDER_NAME} (from ${MOUNTED_EFI})"
+SOURCE_FOLDER_NAME=\$(basename "\${SOURCE_UBUNTU_FOLDER}")
+log_message "Source folder: \${SOURCE_FOLDER_NAME} (from \${MOUNTED_EFI})"
 
 # Sync to each unmounted EFI partition
 SYNC_COUNT=0
-for partition in "${EFI_PARTITIONS[@]}"; do
-    if [[ "${partition}" == "${MOUNTED_EFI}" ]]; then
+for partition in "\${EFI_PARTITIONS[@]}"; do
+    if [[ "\${partition}" == "\${MOUNTED_EFI}" ]]; then
         continue
     fi
 
-    log_message "Syncing to ${partition}..."
+    log_message "Syncing to \${partition}..."
 
-    TARGET_MOUNT=$(mktemp -d)
+    TARGET_MOUNT=\$(mktemp -d)
 
-    if ! mount "${partition}" "${TARGET_MOUNT}"; then
-        log_message "  ERROR: Failed to mount ${partition}"
-        rmdir "${TARGET_MOUNT}"
+    if ! mount "\${partition}" "\${TARGET_MOUNT}"; then
+        log_message "  ERROR: Failed to mount \${partition}"
+        rmdir "\${TARGET_MOUNT}"
         continue
     fi
 
     # Find the Ubuntu folder on this target partition (should have different name)
-    TARGET_UBUNTU_FOLDER=$(find "${TARGET_MOUNT}/EFI/" -maxdepth 1 -name "Ubuntu-*" -type d 2>/dev/null | head -1)
+    TARGET_UBUNTU_FOLDER=\$(find "\${TARGET_MOUNT}/EFI/" -maxdepth 1 -name "Ubuntu-*" -type d 2>/dev/null | head -1)
 
-    if [[ -z "${TARGET_UBUNTU_FOLDER}" ]]; then
-        log_message "  WARNING: No Ubuntu-* folder found on ${partition}, skipping"
-        umount "${TARGET_MOUNT}"
-        rmdir "${TARGET_MOUNT}"
+    if [[ -z "\${TARGET_UBUNTU_FOLDER}" ]]; then
+        log_message "  WARNING: No Ubuntu-* folder found on \${partition}, skipping"
+        umount "\${TARGET_MOUNT}"
+        rmdir "\${TARGET_MOUNT}"
         continue
     fi
 
-    TARGET_FOLDER_NAME=$(basename "${TARGET_UBUNTU_FOLDER}")
-    log_message "  Target folder: ${TARGET_FOLDER_NAME}"
+    TARGET_FOLDER_NAME=\$(basename "\${TARGET_UBUNTU_FOLDER}")
+    log_message "  Target folder: \${TARGET_FOLDER_NAME}"
 
     # Sync bootloader files (shimx64.efi, grubx64.efi, grub.cfg, etc.)
-    if rsync -av --delete "${SOURCE_UBUNTU_FOLDER}/" "${TARGET_UBUNTU_FOLDER}/" >/dev/null 2>&1; then
-        log_message "  ✓ Files synced: ${SOURCE_FOLDER_NAME} → ${TARGET_FOLDER_NAME}"
+    if rsync -av --delete "\${SOURCE_UBUNTU_FOLDER}/" "\${TARGET_UBUNTU_FOLDER}/" >/dev/null 2>&1; then
+        log_message "  ✓ Files synced: \${SOURCE_FOLDER_NAME} → \${TARGET_FOLDER_NAME}"
         ((SYNC_COUNT++))
     else
-        log_message "  ERROR: Failed to sync files to ${TARGET_FOLDER_NAME}"
+        log_message "  ERROR: Failed to sync files to \${TARGET_FOLDER_NAME}"
     fi
 
     # Also sync /EFI/BOOT/ fallback bootloader
     if [[ -d /boot/efi/EFI/BOOT ]]; then
-        mkdir -p "${TARGET_MOUNT}/EFI/BOOT"
-        if rsync -av --delete /boot/efi/EFI/BOOT/ "${TARGET_MOUNT}/EFI/BOOT/" >/dev/null 2>&1; then
+        mkdir -p "\${TARGET_MOUNT}/EFI/BOOT"
+        if rsync -av --delete /boot/efi/EFI/BOOT/ "\${TARGET_MOUNT}/EFI/BOOT/" >/dev/null 2>&1; then
             log_message "  ✓ /EFI/BOOT/ fallback synced"
         fi
     fi
 
-    umount "${TARGET_MOUNT}"
-    rmdir "${TARGET_MOUNT}"
+    umount "\${TARGET_MOUNT}"
+    rmdir "\${TARGET_MOUNT}"
 done
 
-if [[ ${SYNC_COUNT} -eq 0 ]]; then
+if [[ \${SYNC_COUNT} -eq 0 ]]; then
     log_message "WARNING: No partitions were synced"
     exit 1
 fi
 
-log_message "EFI sync completed successfully (${SYNC_COUNT} partition(s) synced)"
+log_message "EFI sync completed successfully (\${SYNC_COUNT} partition(s) synced)"
 EFI_SYNC_SCRIPT
 
     chmod +x /mnt/usr/local/bin/sync-efi-partitions
@@ -2574,6 +2603,9 @@ if ! setup_zfs_config; then
     exit 1
 fi
 
+# Ensure /usr/local/bin exists in the chroot environment
+mkdir -p /mnt/usr/local/bin
+
 # Create EFI sync script
 if ! create_efi_sync_script; then
     log_error "Failed to create EFI sync script"
@@ -2595,7 +2627,7 @@ create_post_install_test() {
 set -euo pipefail
 
 echo "=== ZFS Mirror Installation Test ==="
-echo "Generated on: $(date)"
+echo "Generated on: \$(date)"
 echo ""
 
 echo "1. Pool Status:"
@@ -2604,8 +2636,8 @@ echo ""
 
 echo "2. Pool Health Summary:"
 if zpool list rpool &>/dev/null; then
-    status=$(zpool list -H -o health rpool 2>/dev/null || echo "UNKNOWN")
-    echo "  rpool: $status"
+    status=\$(zpool list -H -o health rpool 2>/dev/null || echo "UNKNOWN")
+    echo "  rpool: \$status"
 else
     echo "  rpool: NOT FOUND"
 fi
@@ -2620,13 +2652,13 @@ efibootmgr 2>/dev/null | grep -E "(Boot|Ubuntu-)" || echo "  ERROR: Could not re
 echo ""
 
 echo "5. EFI Partition Status:"
-EFI_UUID=$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", $1); print $1}' /etc/fstab 2>/dev/null || echo "")
-if [[ -n "$EFI_UUID" ]]; then
-    echo "  EFI UUID: $EFI_UUID"
-    mapfile -t EFI_PARTS < <(blkid --output device --match-token UUID="$EFI_UUID" 2>/dev/null || true)
-    echo "  EFI Partitions found: ${#EFI_PARTS[@]}"
-    for part in "${EFI_PARTS[@]}"; do
-        echo "    $part"
+EFI_UUID=\$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", \$1); print \$1}' /etc/fstab 2>/dev/null || echo "")
+if [[ -n "\$EFI_UUID" ]]; then
+    echo "  EFI UUID: \$EFI_UUID"
+    mapfile -t EFI_PARTS < <(blkid --output device --match-token UUID="\$EFI_UUID" 2>/dev/null || true)
+    echo "  EFI Partitions found: \${#EFI_PARTS[@]}"
+    for part in "\${EFI_PARTS[@]}"; do
+        echo "    \$part"
     done
 else
     echo "  ERROR: Could not find EFI UUID in fstab"
@@ -2647,25 +2679,25 @@ fi
 echo ""
 
 echo "7. System Information:"
-echo "  Hostname: $(hostname)"
-echo "  Kernel: $(uname -r)"
-echo "  ZFS Version: $(zfs version 2>/dev/null | head -1 || echo "Unknown")"
-echo "  Uptime: $(uptime | cut -d',' -f1)"
+echo "  Hostname: \$(hostname)"
+echo "  Kernel: \$(uname -r)"
+echo "  ZFS Version: \$(zfs version 2>/dev/null | head -1 || echo "Unknown")"
+echo "  Uptime: \$(uptime | cut -d',' -f1)"
 echo ""
 
 echo "8. Drive Failure Simulation Test Commands:"
 echo "  To test drive failure resilience, run these commands as root:"
 echo ""
 echo "  # Simulate drive 1 failure:"
-mapfile -t RPOOL_DEVS < <(zpool status rpool | awk '/\/dev\// {print $1}' | head -2)
-if [[ ${#RPOOL_DEVS[@]} -ge 2 ]]; then
-    echo "  sudo zpool offline rpool ${RPOOL_DEVS[0]}"
+mapfile -t RPOOL_DEVS < <(zpool status rpool | awk '/\/dev\// {print \$1}' | head -2)
+if [[ \${#RPOOL_DEVS[@]} -ge 2 ]]; then
+    echo "  sudo zpool offline rpool \${RPOOL_DEVS[0]}"
     echo "  # Verify system still works, then bring it back online:"
-    echo "  sudo zpool online rpool ${RPOOL_DEVS[0]}"
+    echo "  sudo zpool online rpool \${RPOOL_DEVS[0]}"
     echo ""
     echo "  # Simulate drive 2 failure:"
-    echo "  sudo zpool offline rpool ${RPOOL_DEVS[1]}"
-    echo "  sudo zpool online rpool ${RPOOL_DEVS[1]}"
+    echo "  sudo zpool offline rpool \${RPOOL_DEVS[1]}"
+    echo "  sudo zpool online rpool \${RPOOL_DEVS[1]}"
 else
     echo "  # Could not determine pool devices automatically"
     echo "  # Use: zpool status rpool"
@@ -2705,50 +2737,50 @@ cat << GRUB_SYNC_SCRIPT > /mnt/usr/local/bin/sync-grub-to-mirror-drives
 set -euo pipefail
 
 # Set up logging functions
-log_info() { logger -t "sync-grub-to-mirror-drives" -p user.info "$1"; echo "$1"; }
-log_error() { logger -t "sync-grub-to-mirror-drives" -p user.err "$1"; echo "ERROR: $1" >&2; }
-log_warning() { logger -t "sync-grub-to-mirror-drives" -p user.warning "$1"; echo "WARNING: $1"; }
+log_info() { logger -t "sync-grub-to-mirror-drives" -p user.info "\$1"; echo "\$1"; }
+log_error() { logger -t "sync-grub-to-mirror-drives" -p user.err "\$1"; echo "ERROR: \$1" >&2; }
+log_warning() { logger -t "sync-grub-to-mirror-drives" -p user.warning "\$1"; echo "WARNING: \$1"; }
 
 # Get drive identifier for EFI folder naming (same logic as installation)
 get_drive_identifier() {
-    local disk_path="$1"
+    local disk_path="\$1"
     local model_part=""
     local suffix_part=""
 
     # Extract model and suffix from by-id path
-    if [[ "${disk_path}" =~ nvme-(.+)_([A-Za-z0-9-]{8,})$ ]]; then
-        model_part="${BASH_REMATCH[1]}"
-        suffix_part="${BASH_REMATCH[2]}"
-    elif [[ "${disk_path}" =~ (ata|scsi)-(.+)_([A-Za-z0-9-]{8,})$ ]]; then
-        model_part="${BASH_REMATCH[2]}"
-        suffix_part="${BASH_REMATCH[3]}"
+    if [[ "\${disk_path}" =~ nvme-(.+)_([A-Za-z0-9-]{8,})\$ ]]; then
+        model_part="\${BASH_REMATCH[1]}"
+        suffix_part="\${BASH_REMATCH[2]}"
+    elif [[ "\${disk_path}" =~ (ata|scsi)-(.+)_([A-Za-z0-9-]{8,})\$ ]]; then
+        model_part="\${BASH_REMATCH[2]}"
+        suffix_part="\${BASH_REMATCH[3]}"
     else
-        local dev_name=$(basename "${disk_path}")
+        local dev_name=\$(basename "\${disk_path}")
         model_part="Disk"
-        suffix_part="${dev_name}"
+        suffix_part="\${dev_name}"
     fi
 
     # Clean up model part
-    model_part="${model_part//_/-}"
-    model_part="${model_part##-}"
-    model_part="${model_part%%-}"
-    while [[ "${model_part}" == *"--"* ]]; do
-        model_part="${model_part//--/-}"
+    model_part="\${model_part//_/-}"
+    model_part="\${model_part##-}"
+    model_part="\${model_part%%-}"
+    while [[ "\${model_part}" == *"--"* ]]; do
+        model_part="\${model_part//--/-}"
     done
 
     # Truncate to 15 chars
-    if [[ ${#model_part} -gt 15 ]]; then
-        model_part="${model_part:0:15}"
-        model_part="${model_part%-}"
+    if [[ \${#model_part} -gt 15 ]]; then
+        model_part="\${model_part:0:15}"
+        model_part="\${model_part%-}"
     fi
 
     # Get last 4 from suffix
-    local last_four="${suffix_part: -4}"
-    if [[ ${#last_four} -lt 4 ]]; then
-        last_four=$(printf "%04s" "${last_four}" | tr ' ' '0')
+    local last_four="\${suffix_part: -4}"
+    if [[ \${#last_four} -lt 4 ]]; then
+        last_four=\$(printf "%04s" "\${last_four}" | tr ' ' '0')
     fi
 
-    echo "${model_part}-${last_four}"
+    echo "\${model_part}-\${last_four}"
 }
 
 log_info "Syncing GRUB to all ZFS mirror drives..."
@@ -2785,72 +2817,72 @@ fi
 
 while IFS= read -r line; do
     # Extract device paths from zpool status (format: device-name-part3  ONLINE  ...)
-    if [[ "$line" =~ ^[[:space:]]+(.*-part3)[[:space:]]+ONLINE ]]; then
-        drive_part3="${BASH_REMATCH[1]}"
+    if [[ "\$line" =~ ^[[:space:]]+(.*-part3)[[:space:]]+ONLINE ]]; then
+        drive_part3="\${BASH_REMATCH[1]}"
 
         # Add /dev/disk/by-id/ prefix if not present
-        if [[ ! "$drive_part3" =~ ^/dev/disk/by-id/ ]]; then
-            drive_part3="/dev/disk/by-id/${drive_part3}"
+        if [[ ! "\$drive_part3" =~ ^/dev/disk/by-id/ ]]; then
+            drive_part3="/dev/disk/by-id/\${drive_part3}"
         fi
 
         # Extract base drive (remove -part3 suffix)
-        if [[ "$drive_part3" =~ ^(.+)-part3$ ]]; then
-            base_drive="${BASH_REMATCH[1]}"
-            RPOOL_DRIVES+=("$base_drive")
-            log_info "  Found ONLINE drive: $base_drive"
+        if [[ "\$drive_part3" =~ ^(.+)-part3\$ ]]; then
+            base_drive="\${BASH_REMATCH[1]}"
+            RPOOL_DRIVES+=("\$base_drive")
+            log_info "  Found ONLINE drive: \$base_drive"
         fi
     fi
 done < <(zpool status rpool)
 
-if [[ ${#RPOOL_DRIVES[@]} -eq 0 ]]; then
+if [[ \${#RPOOL_DRIVES[@]} -eq 0 ]]; then
     log_error "No ONLINE drives found in rpool"
     exit 1
 fi
 
-log_info "Found ${#RPOOL_DRIVES[@]} ONLINE drive(s) in rpool"
+log_info "Found \${#RPOOL_DRIVES[@]} ONLINE drive(s) in rpool"
 
 # Get EFI UUID from fstab
-EFI_UUID=$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", $1); print $1}' /etc/fstab 2>/dev/null || echo "")
-if [[ -z "${EFI_UUID}" ]]; then
+EFI_UUID=\$(awk '/\/boot\/efi/ && /^UUID=/ {gsub(/UUID=/, "", \$1); print \$1}' /etc/fstab 2>/dev/null || echo "")
+if [[ -z "\${EFI_UUID}" ]]; then
     log_error "Could not find EFI UUID in fstab"
     exit 1
 fi
 
 # Get currently mounted EFI partition
-MOUNTED_EFI=$(mount | grep '/boot/efi' | awk '{print $1}')
-if [[ -z "${MOUNTED_EFI}" ]]; then
+MOUNTED_EFI=\$(mount | grep '/boot/efi' | awk '{print \$1}')
+if [[ -z "\${MOUNTED_EFI}" ]]; then
     log_error "No EFI partition currently mounted at /boot/efi"
     exit 1
 fi
 
 # Find all EFI partitions with this UUID
-mapfile -t ALL_EFI_PARTITIONS < <(blkid --output device --match-token UUID="${EFI_UUID}" 2>/dev/null || true)
-log_info "Found ${#ALL_EFI_PARTITIONS[@]} total EFI partition(s) with UUID ${EFI_UUID}"
+mapfile -t ALL_EFI_PARTITIONS < <(blkid --output device --match-token UUID="\${EFI_UUID}" 2>/dev/null || true)
+log_info "Found \${#ALL_EFI_PARTITIONS[@]} total EFI partition(s) with UUID \${EFI_UUID}"
 
 # Filter EFI partitions to only those on ONLINE drives
 EFI_PARTITIONS=()
-for efi_part in "${ALL_EFI_PARTITIONS[@]}"; do
+for efi_part in "\${ALL_EFI_PARTITIONS[@]}"; do
     # Resolve EFI partition to its base drive
     efi_base_drive=""
 
-    if [[ "$efi_part" =~ ^(.+)-part[0-9]+$ ]]; then
+    if [[ "\$efi_part" =~ ^(.+)-part[0-9]+\$ ]]; then
         # Already a by-id path: /dev/disk/by-id/ata-DISK123-part1
-        efi_base_drive="${BASH_REMATCH[1]}"
-    elif [[ "$efi_part" =~ ^(.+)p[0-9]+$ ]]; then
+        efi_base_drive="\${BASH_REMATCH[1]}"
+    elif [[ "\$efi_part" =~ ^(.+)p[0-9]+\$ ]]; then
         # Device path: /dev/nvme0n1p1 -> need to find by-id equivalent
-        device_base="${BASH_REMATCH[1]}"
+        device_base="\${BASH_REMATCH[1]}"
 
         # Find the by-id link that points to this device base
         for link in /dev/disk/by-id/*; do
-            [[ "$link" =~ -part[0-9]+$ ]] && continue
-            [[ "$link" =~ p[0-9]+$ ]] && continue
-            [[ "$link" =~ nvme-eui\. ]] && continue
-            [[ "$link" =~ wwn- ]] && continue
+            [[ "\$link" =~ -part[0-9]+\$ ]] && continue
+            [[ "\$link" =~ p[0-9]+\$ ]] && continue
+            [[ "\$link" =~ nvme-eui\. ]] && continue
+            [[ "\$link" =~ wwn- ]] && continue
 
-            if [[ -L "$link" ]]; then
-                target=$(readlink -f "$link")
-                if [[ "$target" == "$device_base" ]]; then
-                    efi_base_drive="$link"
+            if [[ -L "\$link" ]]; then
+                target=\$(readlink -f "\$link")
+                if [[ "\$target" == "\$device_base" ]]; then
+                    efi_base_drive="\$link"
                     break
                 fi
             fi
@@ -2858,126 +2890,126 @@ for efi_part in "${ALL_EFI_PARTITIONS[@]}"; do
     fi
 
     # Check if this EFI partition's base drive is in the ONLINE drives list
-    if [[ -n "$efi_base_drive" ]]; then
-        for rpool_drive in "${RPOOL_DRIVES[@]}"; do
-            if [[ "$efi_base_drive" == "$rpool_drive" ]]; then
-                EFI_PARTITIONS+=("$efi_part")
-                log_info "  Including EFI partition $efi_part (drive is ONLINE in rpool)"
+    if [[ -n "\$efi_base_drive" ]]; then
+        for rpool_drive in "\${RPOOL_DRIVES[@]}"; do
+            if [[ "\$efi_base_drive" == "\$rpool_drive" ]]; then
+                EFI_PARTITIONS+=("\$efi_part")
+                log_info "  Including EFI partition \$efi_part (drive is ONLINE in rpool)"
                 break
             fi
         done
     fi
 done
 
-if [[ ${#EFI_PARTITIONS[@]} -eq 0 ]]; then
+if [[ \${#EFI_PARTITIONS[@]} -eq 0 ]]; then
     log_error "No EFI partitions found on ONLINE drives"
     exit 1
 fi
 
-log_info "Will sync GRUB to ${#EFI_PARTITIONS[@]} EFI partition(s) on ONLINE drives"
+log_info "Will sync GRUB to \${#EFI_PARTITIONS[@]} EFI partition(s) on ONLINE drives"
 
 # Build map of EFI partition -> base drive
 declare -A PARTITION_TO_DRIVE
-for efi_part in "${EFI_PARTITIONS[@]}"; do
+for efi_part in "\${EFI_PARTITIONS[@]}"; do
     base_drive=""
 
-    if [[ "$efi_part" =~ ^(.+)-part[0-9]+$ ]]; then
+    if [[ "\$efi_part" =~ ^(.+)-part[0-9]+\$ ]]; then
         # Already a by-id path: /dev/disk/by-id/ata-DISK123-part1
-        base_drive="${BASH_REMATCH[1]}"
-        log_info "  Mapped: $efi_part -> $base_drive"
-    elif [[ "$efi_part" =~ ^(.+)p[0-9]+$ ]]; then
+        base_drive="\${BASH_REMATCH[1]}"
+        log_info "  Mapped: \$efi_part -> \$base_drive"
+    elif [[ "\$efi_part" =~ ^(.+)p[0-9]+\$ ]]; then
         # Device path: /dev/nvme0n1p1 -> need to find by-id equivalent
-        device_base="${BASH_REMATCH[1]}"
+        device_base="\${BASH_REMATCH[1]}"
 
         # Find the by-id link that points to this device base
         # Prefer model/serial identifiers over EUI/WWN identifiers for better naming
         by_id_path=""
         for link in /dev/disk/by-id/*; do
             # Skip partition links
-            [[ "$link" =~ -part[0-9]+$ ]] && continue
-            [[ "$link" =~ p[0-9]+$ ]] && continue
+            [[ "\$link" =~ -part[0-9]+\$ ]] && continue
+            [[ "\$link" =~ p[0-9]+\$ ]] && continue
 
             # Skip EUI and WWN identifiers (prefer model/serial for better naming)
-            [[ "$link" =~ nvme-eui\. ]] && continue
-            [[ "$link" =~ wwn- ]] && continue
+            [[ "\$link" =~ nvme-eui\. ]] && continue
+            [[ "\$link" =~ wwn- ]] && continue
 
             # Check if this link points to our device
-            if [[ -L "$link" ]]; then
-                target=$(readlink -f "$link")
-                if [[ "$target" == "$device_base" ]]; then
-                    by_id_path="$link"
+            if [[ -L "\$link" ]]; then
+                target=\$(readlink -f "\$link")
+                if [[ "\$target" == "\$device_base" ]]; then
+                    by_id_path="\$link"
                     break
                 fi
             fi
         done
 
-        if [[ -n "$by_id_path" ]]; then
-            base_drive="$by_id_path"
-            log_info "  Resolved: $efi_part -> $device_base -> $base_drive"
+        if [[ -n "\$by_id_path" ]]; then
+            base_drive="\$by_id_path"
+            log_info "  Resolved: \$efi_part -> \$device_base -> \$base_drive"
         else
-            log_warning "  Could not find by-id path for $device_base, using device path"
-            base_drive="$device_base"
+            log_warning "  Could not find by-id path for \$device_base, using device path"
+            base_drive="\$device_base"
         fi
-        log_info "  Mapped: $efi_part -> $base_drive"
+        log_info "  Mapped: \$efi_part -> \$base_drive"
     else
-        log_warning "  Could not parse partition name: $efi_part (will skip during install)"
+        log_warning "  Could not parse partition name: \$efi_part (will skip during install)"
     fi
 
-    if [[ -n "$base_drive" ]]; then
-        PARTITION_TO_DRIVE["$efi_part"]="$base_drive"
+    if [[ -n "\$base_drive" ]]; then
+        PARTITION_TO_DRIVE["\$efi_part"]="\$base_drive"
     fi
 done
 
-log_info "Found ${#EFI_PARTITIONS[@]} EFI partition(s) to sync"
+log_info "Found \${#EFI_PARTITIONS[@]} EFI partition(s) to sync"
 
 # Process each EFI partition
 INSTALL_COUNT=0
-for efi_part in "${EFI_PARTITIONS[@]}"; do
-    base_drive="${PARTITION_TO_DRIVE[$efi_part]:-}"
-    if [[ -z "$base_drive" ]]; then
-        log_warning "Could not determine base drive for $efi_part, skipping"
+for efi_part in "\${EFI_PARTITIONS[@]}"; do
+    base_drive="\${PARTITION_TO_DRIVE[\$efi_part]:-}"
+    if [[ -z "\$base_drive" ]]; then
+        log_warning "Could not determine base drive for \$efi_part, skipping"
         continue
     fi
 
-    DRIVE_ID=$(get_drive_identifier "$base_drive")
-    log_info "Processing $efi_part (Drive: $base_drive, ID: Ubuntu-${DRIVE_ID})"
+    DRIVE_ID=\$(get_drive_identifier "\$base_drive")
+    log_info "Processing \$efi_part (Drive: \$base_drive, ID: Ubuntu-\${DRIVE_ID})"
 
     # If this is the currently mounted partition, install directly
-    if [[ "$efi_part" == "$MOUNTED_EFI" ]]; then
+    if [[ "\$efi_part" == "\$MOUNTED_EFI" ]]; then
         log_info "  Installing to mounted partition..."
-        if grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Ubuntu-${DRIVE_ID}" --recheck --no-floppy "$base_drive" >/dev/null 2>&1; then
+        if grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Ubuntu-\${DRIVE_ID}" --recheck --no-floppy "\$base_drive" >/dev/null 2>&1; then
             log_info "  ✓ GRUB installed to mounted partition"
-            INSTALL_COUNT=$((INSTALL_COUNT + 1))
+            INSTALL_COUNT=\$((INSTALL_COUNT + 1))
         else
             log_error "  ✗ Failed to install GRUB to mounted partition"
         fi
     else
         # Mount the other partition temporarily and install there
-        TEMP_MOUNT=$(mktemp -d)
-        log_info "  Mounting $efi_part at $TEMP_MOUNT..."
+        TEMP_MOUNT=\$(mktemp -d)
+        log_info "  Mounting \$efi_part at \$TEMP_MOUNT..."
 
-        if mount "$efi_part" "$TEMP_MOUNT"; then
-            log_info "  Installing to $TEMP_MOUNT..."
-            if grub-install --target=x86_64-efi --efi-directory="$TEMP_MOUNT" --bootloader-id="Ubuntu-${DRIVE_ID}" --recheck --no-floppy "$base_drive" >/dev/null 2>&1; then
-                log_info "  ✓ GRUB installed to $efi_part"
-                INSTALL_COUNT=$((INSTALL_COUNT + 1))
+        if mount "\$efi_part" "\$TEMP_MOUNT"; then
+            log_info "  Installing to \$TEMP_MOUNT..."
+            if grub-install --target=x86_64-efi --efi-directory="\$TEMP_MOUNT" --bootloader-id="Ubuntu-\${DRIVE_ID}" --recheck --no-floppy "\$base_drive" >/dev/null 2>&1; then
+                log_info "  ✓ GRUB installed to \$efi_part"
+                INSTALL_COUNT=\$((INSTALL_COUNT + 1))
             else
-                log_error "  ✗ Failed to install GRUB to $efi_part"
+                log_error "  ✗ Failed to install GRUB to \$efi_part"
             fi
-            umount "$TEMP_MOUNT"
+            umount "\$TEMP_MOUNT"
         else
-            log_error "  ✗ Failed to mount $efi_part"
+            log_error "  ✗ Failed to mount \$efi_part"
         fi
-        rmdir "$TEMP_MOUNT"
+        rmdir "\$TEMP_MOUNT"
     fi
 done
 
-if [[ ${INSTALL_COUNT} -eq 0 ]]; then
+if [[ \${INSTALL_COUNT} -eq 0 ]]; then
     log_error "Failed to install GRUB to any drives"
     exit 1
 fi
 
-log_info "GRUB sync complete (installed to ${INSTALL_COUNT} partition(s))"
+log_info "GRUB sync complete (installed to \${INSTALL_COUNT} partition(s))"
 
 # Manage boot order: alternate between drives and ensure Ubuntu boots first
 log_info "Managing EFI boot order..."
@@ -2985,20 +3017,20 @@ if ! command -v efibootmgr &>/dev/null; then
     log_warning "  efibootmgr not available, skipping boot order management"
 else
     # Get current boot order
-    CURRENT_ORDER=$(efibootmgr | grep "^BootOrder:" | cut -d: -f2 | tr -d ' ')
+    CURRENT_ORDER=\$(efibootmgr | grep "^BootOrder:" | cut -d: -f2 | tr -d ' ')
 
     # Get all Ubuntu boot entries with their boot numbers
     mapfile -t UBUNTU_BOOT_ENTRIES < <(efibootmgr | grep -i ubuntu | grep -oP '^Boot\K[0-9A-F]{4}')
 
-    if [[ ${#UBUNTU_BOOT_ENTRIES[@]} -eq 0 ]]; then
+    if [[ \${#UBUNTU_BOOT_ENTRIES[@]} -eq 0 ]]; then
         log_warning "  No Ubuntu boot entries found"
-    elif [[ ${#UBUNTU_BOOT_ENTRIES[@]} -eq 1 ]]; then
+    elif [[ \${#UBUNTU_BOOT_ENTRIES[@]} -eq 1 ]]; then
         # Only one Ubuntu entry, just make sure it's first
-        OTHER_ENTRIES=$(echo "$CURRENT_ORDER" | tr ',' '\n' | grep -v "^${UBUNTU_BOOT_ENTRIES[0]}\$" | tr '\n' ',' | sed 's/,$//')
-        NEW_ORDER="${UBUNTU_BOOT_ENTRIES[0]}"
-        [[ -n "$OTHER_ENTRIES" ]] && NEW_ORDER="${NEW_ORDER},${OTHER_ENTRIES}"
+        OTHER_ENTRIES=\$(echo "\$CURRENT_ORDER" | tr ',' '\n' | grep -v "^\${UBUNTU_BOOT_ENTRIES[0]}\\$" | tr '\n' ',' | sed 's/,\$//')
+        NEW_ORDER="\${UBUNTU_BOOT_ENTRIES[0]}"
+        [[ -n "\$OTHER_ENTRIES" ]] && NEW_ORDER="\${NEW_ORDER},\${OTHER_ENTRIES}"
 
-        if efibootmgr -o "$NEW_ORDER" >/dev/null 2>&1; then
+        if efibootmgr -o "\$NEW_ORDER" >/dev/null 2>&1; then
             log_info "  ✓ Boot order set: Ubuntu entry first"
         else
             log_warning "  Could not set boot order"
@@ -3007,52 +3039,52 @@ else
         # Multiple Ubuntu entries - alternate which one is first
         # Find which Ubuntu entry is currently first in boot order
         FIRST_UBUNTU=""
-        IFS=',' read -ra ORDER_ARRAY <<< "$CURRENT_ORDER"
-        for boot_num in "${ORDER_ARRAY[@]}"; do
-            for ubuntu_entry in "${UBUNTU_BOOT_ENTRIES[@]}"; do
-                if [[ "$boot_num" == "$ubuntu_entry" ]]; then
-                    FIRST_UBUNTU="$ubuntu_entry"
+        IFS=',' read -ra ORDER_ARRAY <<< "\$CURRENT_ORDER"
+        for boot_num in "\${ORDER_ARRAY[@]}"; do
+            for ubuntu_entry in "\${UBUNTU_BOOT_ENTRIES[@]}"; do
+                if [[ "\$boot_num" == "\$ubuntu_entry" ]]; then
+                    FIRST_UBUNTU="\$ubuntu_entry"
                     break 2
                 fi
             done
         done
 
         # Flip the order of Ubuntu entries
-        if [[ -n "$FIRST_UBUNTU" ]]; then
+        if [[ -n "\$FIRST_UBUNTU" ]]; then
             # Move first Ubuntu entry to end of Ubuntu entries
             NEW_UBUNTU_ORDER=()
-            for entry in "${UBUNTU_BOOT_ENTRIES[@]}"; do
-                if [[ "$entry" != "$FIRST_UBUNTU" ]]; then
-                    NEW_UBUNTU_ORDER+=("$entry")
+            for entry in "\${UBUNTU_BOOT_ENTRIES[@]}"; do
+                if [[ "\$entry" != "\$FIRST_UBUNTU" ]]; then
+                    NEW_UBUNTU_ORDER+=("\$entry")
                 fi
             done
-            NEW_UBUNTU_ORDER+=("$FIRST_UBUNTU")
-            log_info "  Rotating Ubuntu boot order: ${UBUNTU_BOOT_ENTRIES[*]} -> ${NEW_UBUNTU_ORDER[*]}"
+            NEW_UBUNTU_ORDER+=("\$FIRST_UBUNTU")
+            log_info "  Rotating Ubuntu boot order: \${UBUNTU_BOOT_ENTRIES[*]} -> \${NEW_UBUNTU_ORDER[*]}"
         else
             # No Ubuntu entry was first, just use current Ubuntu order
-            NEW_UBUNTU_ORDER=("${UBUNTU_BOOT_ENTRIES[@]}")
+            NEW_UBUNTU_ORDER=("\${UBUNTU_BOOT_ENTRIES[@]}")
         fi
 
         # Build new boot order: Ubuntu entries first (rotated), then everything else
         OTHER_ENTRIES=""
-        for boot_num in "${ORDER_ARRAY[@]}"; do
+        for boot_num in "\${ORDER_ARRAY[@]}"; do
             IS_UBUNTU=false
-            for ubuntu_entry in "${UBUNTU_BOOT_ENTRIES[@]}"; do
-                if [[ "$boot_num" == "$ubuntu_entry" ]]; then
+            for ubuntu_entry in "\${UBUNTU_BOOT_ENTRIES[@]}"; do
+                if [[ "\$boot_num" == "\$ubuntu_entry" ]]; then
                     IS_UBUNTU=true
                     break
                 fi
             done
-            if [[ "$IS_UBUNTU" == "false" ]]; then
-                [[ -n "$OTHER_ENTRIES" ]] && OTHER_ENTRIES="${OTHER_ENTRIES},"
-                OTHER_ENTRIES="${OTHER_ENTRIES}${boot_num}"
+            if [[ "\$IS_UBUNTU" == "false" ]]; then
+                [[ -n "\$OTHER_ENTRIES" ]] && OTHER_ENTRIES="\${OTHER_ENTRIES},"
+                OTHER_ENTRIES="\${OTHER_ENTRIES}\${boot_num}"
             fi
         done
 
-        NEW_ORDER=$(IFS=,; echo "${NEW_UBUNTU_ORDER[*]}")
-        [[ -n "$OTHER_ENTRIES" ]] && NEW_ORDER="${NEW_ORDER},${OTHER_ENTRIES}"
+        NEW_ORDER=\$(IFS=,; echo "\${NEW_UBUNTU_ORDER[*]}")
+        [[ -n "\$OTHER_ENTRIES" ]] && NEW_ORDER="\${NEW_ORDER},\${OTHER_ENTRIES}"
 
-        if efibootmgr -o "$NEW_ORDER" >/dev/null 2>&1; then
+        if efibootmgr -o "\$NEW_ORDER" >/dev/null 2>&1; then
             log_info "  ✓ Boot order updated: Ubuntu entries rotated and prioritized"
         else
             log_warning "  Could not set boot order"
@@ -3062,6 +3094,11 @@ fi
 
 log_info "Boot synchronization and order management complete"
 GRUB_SYNC_SCRIPT
+
+if [[ ! -f /mnt/usr/local/bin/sync-grub-to-mirror-drives ]]; then
+    log_error "Failed to create GRUB sync script at /mnt/usr/local/bin/sync-grub-to-mirror-drives"
+    exit 1
+fi
 
 chmod +x /mnt/usr/local/bin/sync-grub-to-mirror-drives
 log_info "GRUB sync script created: /usr/local/bin/sync-grub-to-mirror-drives"
@@ -3081,8 +3118,8 @@ cat << MIRROR_BOOT_SYNC > /mnt/usr/local/bin/sync-mirror-boot
 
 set -euo pipefail
 
-log_info() { logger -t "sync-mirror-boot" -p user.info "$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] INFO: $1"; }
-log_error() { logger -t "sync-mirror-boot" -p user.err "$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] ERROR: $1" >&2; }
+log_info() { logger -t "sync-mirror-boot" -p user.info "\$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] INFO: \$1"; }
+log_error() { logger -t "sync-mirror-boot" -p user.err "\$1" 2>/dev/null || true; echo "$(date '+%F %T') [sync-mirror-boot] ERROR: \$1" >&2; }
 
 log_info "=== ZFS Mirror Boot Sync Starting ==="
 
@@ -3193,9 +3230,9 @@ cat << REPLACE_DRIVE_SCRIPT > /mnt/usr/local/bin/replace-drive-in-zfs-boot-mirro
 set -euo pipefail
 
 # Set up logging functions
-log_info() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.info "$1"; echo "$1"; }
-log_error() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.err "$1"; echo "ERROR: $1" >&2; }
-log_warning() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.warning "$1"; echo "WARNING: $1"; }
+log_info() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.info "\$1"; echo "\$1"; }
+log_error() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.err "\$1"; echo "ERROR: \$1" >&2; }
+log_warning() { logger -t "replace-drive-in-zfs-boot-mirror" -p user.warning "\$1"; echo "WARNING: \$1"; }
 
 # Colors for output
 RED='\033[0;31m'
@@ -3206,8 +3243,8 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 usage() {
-    echo "Usage: $0 <replacement_drive>"
-    echo "Example: $0 /dev/disk/by-id/ata-WDC_WD1234567890_NEWSERIAL"
+    echo "Usage: \$0 <replacement_drive>"
+    echo "Example: \$0 /dev/disk/by-id/ata-WDC_WD1234567890_NEWSERIAL"
     echo ""
     echo "This script will:"
     echo "  1. Auto-detect failed drives in rpool"
@@ -3220,74 +3257,74 @@ usage() {
     exit 1
 }
 
-if [[ $# -ne 1 ]]; then
+if [[ \$# -ne 1 ]]; then
     usage
 fi
 
-REPLACEMENT_DRIVE="$1"
+REPLACEMENT_DRIVE="\$1"
 
 # Verify replacement drive exists
-if [[ ! -b "$REPLACEMENT_DRIVE" ]]; then
-    log_error "Replacement drive $REPLACEMENT_DRIVE does not exist"
-    echo -e "${RED}Error: Replacement drive $REPLACEMENT_DRIVE does not exist${NC}"
+if [[ ! -b "\$REPLACEMENT_DRIVE" ]]; then
+    log_error "Replacement drive \$REPLACEMENT_DRIVE does not exist"
+    echo -e "\${RED}Error: Replacement drive \$REPLACEMENT_DRIVE does not exist\${NC}"
     exit 1
 fi
 
-log_info "Starting drive replacement: $REPLACEMENT_DRIVE"
-echo -e "${BLUE}Analyzing ZFS pool status for failed drives...${NC}"
+log_info "Starting drive replacement: \$REPLACEMENT_DRIVE"
+echo -e "\${BLUE}Analyzing ZFS pool status for failed drives...\${NC}"
 
 # Function to detect failed devices in a pool
 detect_failed_devices() {
-    local pool="$1"
+    local pool="\$1"
     local failed_devices=()
 
-    if ! zpool status "$pool" &>/dev/null; then
-        echo "Pool $pool not found"
+    if ! zpool status "\$pool" &>/dev/null; then
+        echo "Pool \$pool not found"
         return 1
     fi
 
     # Check for devices in failed states (NOT ONLINE or DEGRADED)
     while IFS= read -r line; do
-        if [[ $line =~ ^[[:space:]]+([^[:space:]]+)[[:space:]]+(FAULTED|UNAVAIL|REMOVED|OFFLINE) ]]; then
-            device="${BASH_REMATCH[1]}"
-            state="${BASH_REMATCH[2]}"
-            failed_devices+=("$device:$state")
-            echo "  Found failed device: $device (state: $state)"
+        if [[ \$line =~ ^[[:space:]]+([^[:space:]]+)[[:space:]]+(FAULTED|UNAVAIL|REMOVED|OFFLINE) ]]; then
+            device="\${BASH_REMATCH[1]}"
+            state="\${BASH_REMATCH[2]}"
+            failed_devices+=("\$device:\$state")
+            echo "  Found failed device: \$device (state: \$state)"
         fi
-    done < <(zpool status -v "$pool")
+    done < <(zpool status -v "\$pool")
 
     # Also check for numeric GUIDs in failed states (indicates device path issues)
     while IFS= read -r line; do
-        if [[ $line =~ ^[[:space:]]+([0-9]+)[[:space:]]+(FAULTED|UNAVAIL|REMOVED|OFFLINE) ]]; then
-            guid="${BASH_REMATCH[1]}"
-            state="${BASH_REMATCH[2]}"
+        if [[ \$line =~ ^[[:space:]]+([0-9]+)[[:space:]]+(FAULTED|UNAVAIL|REMOVED|OFFLINE) ]]; then
+            guid="\${BASH_REMATCH[1]}"
+            state="\${BASH_REMATCH[2]}"
             # Check if this is actually a GUID (long number)
-            if [[ ${#guid} -gt 10 ]]; then
-                failed_devices+=("$guid:$state")
-                echo "  Found device with GUID: $guid (state: $state)"
+            if [[ \${#guid} -gt 10 ]]; then
+                failed_devices+=("\$guid:\$state")
+                echo "  Found device with GUID: \$guid (state: \$state)"
             fi
         fi
-    done < <(zpool status -v "$pool")
+    done < <(zpool status -v "\$pool")
 
-    printf '%s\n' "${failed_devices[@]}"
+    printf '%s\n' "\${failed_devices[@]}"
 }
 
 # Function to validate that resilvering has started successfully
 validate_resilvering_started() {
-    echo -e "${BLUE}Validating that resilvering has started...${NC}"
+    echo -e "\${BLUE}Validating that resilvering has started...\${NC}"
 
     # Wait a moment for ZFS to begin resilvering
     sleep 3
 
     # Check if resilvering is active
     if zpool status | grep -q "resilver\|replace"; then
-        echo -e "${GREEN}✓ Resilvering has started successfully${NC}"
+        echo -e "\${GREEN}✓ Resilvering has started successfully\${NC}"
         echo ""
         echo "Current status:"
         zpool status
         return 0
     else
-        echo -e "${RED}✗ Resilvering does not appear to have started${NC}"
+        echo -e "\${RED}✗ Resilvering does not appear to have started\${NC}"
         echo "Current pool status:"
         zpool status
         return 1
@@ -3296,89 +3333,89 @@ validate_resilvering_started() {
 
 # Detect failed devices in rpool
 echo "Checking rpool for failed devices..."
-RPOOL_FAILED=($(detect_failed_devices "rpool"))
+RPOOL_FAILED=(\$(detect_failed_devices "rpool"))
 
-if [[ ${#RPOOL_FAILED[@]} -eq 0 ]]; then
-    echo -e "${GREEN}No failed devices detected in rpool.${NC}"
+if [[ \${#RPOOL_FAILED[@]} -eq 0 ]]; then
+    echo -e "\${GREEN}No failed devices detected in rpool.\${NC}"
     echo ""
     echo "Current pool status:"
     zpool status
     echo ""
-    echo -e "${YELLOW}${BOLD}Drive replacement is only allowed for failed drives.${NC}"
-    echo -e "${YELLOW}This safety check prevents accidentally replacing healthy drives.${NC}"
+    echo -e "\${YELLOW}\${BOLD}Drive replacement is only allowed for failed drives.\${NC}"
+    echo -e "\${YELLOW}This safety check prevents accidentally replacing healthy drives.\${NC}"
     echo ""
-    echo -e "${YELLOW}If you need to replace a working drive for other reasons:${NC}"
-    echo -e "  1. Manually offline the drive: ${GREEN}zpool offline poolname device${NC}"
+    echo -e "\${YELLOW}If you need to replace a working drive for other reasons:\${NC}"
+    echo -e "  1. Manually offline the drive: \${GREEN}zpool offline poolname device\${NC}"
     echo -e "  2. Then run this script again"
     echo ""
     exit 0
 fi
 
 echo ""
-echo -e "${RED}${BOLD}⚠️  SAFETY VERIFICATION ⚠️${NC}"
-echo -e "${YELLOW}The following drives will be replaced with ${BOLD}${REPLACEMENT_DRIVE}${NC}:"
+echo -e "\${RED}\${BOLD}⚠️  SAFETY VERIFICATION ⚠️\${NC}"
+echo -e "\${YELLOW}The following drives will be replaced with \${BOLD}\${REPLACEMENT_DRIVE}\${NC}:"
 
-echo -e "${YELLOW}Failed devices summary:${NC}"
-if [[ ${#RPOOL_FAILED[@]} -gt 0 ]]; then
-    echo "  rpool: ${RPOOL_FAILED[*]}"
+echo -e "\${YELLOW}Failed devices summary:\${NC}"
+if [[ \${#RPOOL_FAILED[@]} -gt 0 ]]; then
+    echo "  rpool: \${RPOOL_FAILED[*]}"
 fi
 
-echo -e "${RED}${BOLD}WARNING: This will completely wipe ${REPLACEMENT_DRIVE}${NC}"
-echo -e "${YELLOW}Press Enter to continue, or Ctrl+C to abort...${NC}"
+echo -e "\${RED}\${BOLD}WARNING: This will completely wipe \${REPLACEMENT_DRIVE}\${NC}"
+echo -e "\${YELLOW}Press Enter to continue, or Ctrl+C to abort...\${NC}"
 read -r
 
-echo -e "${BLUE}Step 1: Preparing replacement drive...${NC}"
+echo -e "\${BLUE}Step 1: Preparing replacement drive...\${NC}"
 log_info "Step 1: Preparing replacement drive"
 
 # Wipe the replacement drive
-log_info "Wiping replacement drive: $REPLACEMENT_DRIVE"
-sgdisk --zap-all "$REPLACEMENT_DRIVE"
+log_info "Wiping replacement drive: \$REPLACEMENT_DRIVE"
+sgdisk --zap-all "\$REPLACEMENT_DRIVE"
 
 # Copy partition table from a working drive
-WORKING_DRIVE_RAW=$(zpool status rpool | grep -E '^[[:space:]]+.*-part[0-9]+' | grep ONLINE | head -1 | awk '{print $1}' | sed 's/-part[0-9]*$//')
-if [[ "$WORKING_DRIVE_RAW" =~ ^/dev/disk/by-id/ ]]; then
-    WORKING_DRIVE="$WORKING_DRIVE_RAW"
+WORKING_DRIVE_RAW=\$(zpool status rpool | grep -E '^[[:space:]]+.*-part[0-9]+' | grep ONLINE | head -1 | awk '{print \$1}' | sed 's/-part[0-9]*\$//')
+if [[ "\$WORKING_DRIVE_RAW" =~ ^/dev/disk/by-id/ ]]; then
+    WORKING_DRIVE="\$WORKING_DRIVE_RAW"
 else
-    WORKING_DRIVE="/dev/disk/by-id/$WORKING_DRIVE_RAW"
+    WORKING_DRIVE="/dev/disk/by-id/\$WORKING_DRIVE_RAW"
 fi
-if [[ -z "$WORKING_DRIVE" ]]; then
+if [[ -z "\$WORKING_DRIVE" ]]; then
     log_error "Could not find a working drive to copy partition table from"
-    echo -e "${RED}Error: Could not find a working drive to copy partition table from${NC}"
+    echo -e "\${RED}Error: Could not find a working drive to copy partition table from\${NC}"
     exit 1
 fi
 
-log_info "Copying partition table from $WORKING_DRIVE to $REPLACEMENT_DRIVE"
-echo "Copying partition table from $WORKING_DRIVE to $REPLACEMENT_DRIVE"
-sgdisk "$WORKING_DRIVE" -R "$REPLACEMENT_DRIVE"
-sgdisk -G "$REPLACEMENT_DRIVE"
+log_info "Copying partition table from \$WORKING_DRIVE to \$REPLACEMENT_DRIVE"
+echo "Copying partition table from \$WORKING_DRIVE to \$REPLACEMENT_DRIVE"
+sgdisk "\$WORKING_DRIVE" -R "\$REPLACEMENT_DRIVE"
+sgdisk -G "\$REPLACEMENT_DRIVE"
 
-echo -e "${BLUE}Step 2: Replacing failed drives in ZFS pools...${NC}"
+echo -e "\${BLUE}Step 2: Replacing failed drives in ZFS pools...\${NC}"
 log_info "Step 2: Replacing failed drives in ZFS pools"
 
 # Replace in rpool if needed
-if [[ ${#RPOOL_FAILED[@]} -gt 0 ]]; then
-    log_info "Replacing failed device(s) in rpool: ${RPOOL_FAILED[*]}"
-    for failed_device_info in "${RPOOL_FAILED[@]}"; do
-        failed_device="${failed_device_info%:*}"
-        log_info "Attempting rpool replacement: $failed_device -> ${REPLACEMENT_DRIVE}-part2"
-        echo "Replacing $failed_device in rpool..."
-        if zpool replace rpool "$failed_device" "${REPLACEMENT_DRIVE}-part2"; then
+if [[ \${#RPOOL_FAILED[@]} -gt 0 ]]; then
+    log_info "Replacing failed device(s) in rpool: \${RPOOL_FAILED[*]}"
+    for failed_device_info in "\${RPOOL_FAILED[@]}"; do
+        failed_device="\${failed_device_info%:*}"
+        log_info "Attempting rpool replacement: \$failed_device -> \${REPLACEMENT_DRIVE}-part2"
+        echo "Replacing \$failed_device in rpool..."
+        if zpool replace rpool "\$failed_device" "\${REPLACEMENT_DRIVE}-part2"; then
             log_info "rpool replacement initiated successfully"
             echo "  ✓ rpool replacement initiated"
             break
         else
-            log_warning "rpool replacement failed for $failed_device"
+            log_warning "rpool replacement failed for \$failed_device"
             echo "  ✗ rpool replacement failed, trying alternative method..."
         fi
     done
 fi
 
-echo -e "${BLUE}Step 3: Installing GRUB and syncing EFI...${NC}"
+echo -e "\${BLUE}Step 3: Installing GRUB and syncing EFI...\${NC}"
 log_info "Step 3: Installing GRUB and syncing EFI"
 
 # Format EFI partition
-log_info "Formatting EFI partition: ${REPLACEMENT_DRIVE}-part1"
-mkfs.fat -F32 "${REPLACEMENT_DRIVE}-part1"
+log_info "Formatting EFI partition: \${REPLACEMENT_DRIVE}-part1"
+mkfs.fat -F32 "\${REPLACEMENT_DRIVE}-part1"
 
 # Sync EFI partitions
 if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
@@ -3387,42 +3424,42 @@ if [[ -x /usr/local/bin/sync-efi-partitions ]]; then
     /usr/local/bin/sync-efi-partitions
 else
     log_warning "EFI sync script not found, manual EFI sync required"
-    echo -e "${YELLOW}Warning: EFI sync script not found, manual EFI sync required${NC}"
+    echo -e "\${YELLOW}Warning: EFI sync script not found, manual EFI sync required\${NC}"
 fi
 
 # Install GRUB to replacement drive
-log_info "Installing GRUB to replacement drive: $REPLACEMENT_DRIVE"
+log_info "Installing GRUB to replacement drive: \$REPLACEMENT_DRIVE"
 echo "Installing GRUB to replacement drive..."
-grub-install --target=x86_64-efi --efi-directory=/boot/efi "$REPLACEMENT_DRIVE"
+grub-install --target=x86_64-efi --efi-directory=/boot/efi "\$REPLACEMENT_DRIVE"
 
-echo -e "${BLUE}Step 4: Validating drive replacement...${NC}"
+echo -e "\${BLUE}Step 4: Validating drive replacement...\${NC}"
 
 # Validate that resilvering started successfully
 if ! validate_resilvering_started; then
-    echo -e "${RED}Drive replacement may have failed. Please check the output above.${NC}"
+    echo -e "\${RED}Drive replacement may have failed. Please check the output above.\${NC}"
     exit 1
 fi
 
 echo ""
-echo -e "${GREEN}${BOLD}Drive replacement initiated successfully!${NC}"
+echo -e "\${GREEN}\${BOLD}Drive replacement initiated successfully!\${NC}"
 echo ""
-echo -e "${YELLOW}${BOLD}Resilvering is now in progress.${NC}"
+echo -e "\${YELLOW}\${BOLD}Resilvering is now in progress.\${NC}"
 echo ""
-echo -e "${YELLOW}Monitor progress with:${NC}"
-echo -e "  ${GREEN}watch zpool status${NC}     # Live updates every 2 seconds"
-echo -e "  ${GREEN}zpool status${NC}           # Check current status"
+echo -e "\${YELLOW}Monitor progress with:\${NC}"
+echo -e "  \${GREEN}watch zpool status\${NC}     # Live updates every 2 seconds"
+echo -e "  \${GREEN}zpool status\${NC}           # Check current status"
 echo ""
-echo -e "${YELLOW}Resilvering will complete automatically in the background.${NC}"
-echo -e "${YELLOW}Your system remains fully functional during this process.${NC}"
+echo -e "\${YELLOW}Resilvering will complete automatically in the background.\${NC}"
+echo -e "\${YELLOW}Your system remains fully functional during this process.\${NC}"
 echo ""
-echo -e "${YELLOW}When resilvering completes:${NC}"
+echo -e "\${YELLOW}When resilvering completes:\${NC}"
 echo -e "  • Pool status will show all drives as ONLINE"
 echo -e "  • No 'resilver' or 'replace' text in zpool status"
 echo -e "  • Both drives will be fully synchronized"
 echo ""
-echo -e "${GREEN}Final verification commands:${NC}"
-echo -e "  ${GREEN}zpool status${NC}                    # Verify all drives ONLINE"
-echo -e "  ${GREEN}sudo /usr/local/bin/test-zfs-mirror${NC}  # Test system integrity"
+echo -e "\${GREEN}Final verification commands:\${NC}"
+echo -e "  \${GREEN}zpool status\${NC}                    # Verify all drives ONLINE"
+echo -e "  \${GREEN}sudo /usr/local/bin/test-zfs-mirror\${NC}  # Test system integrity"
 echo ""
 
 # Clear any remaining errors
@@ -3431,7 +3468,7 @@ log_info "Clearing pool errors"
 zpool clear rpool 2>/dev/null || true
 
 log_info "Drive replacement process completed successfully!"
-echo -e "${GREEN}Drive replacement process completed successfully!${NC}"
+echo -e "\${GREEN}Drive replacement process completed successfully!\${NC}"
 REPLACE_DRIVE_SCRIPT
 
 chmod +x /mnt/usr/local/bin/replace-drive-in-zfs-boot-mirror
