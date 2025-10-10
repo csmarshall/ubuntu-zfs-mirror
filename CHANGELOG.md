@@ -1,5 +1,32 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.8.2 - Remove temporary UEFI boot entries after first boot (2025-10-10)
+
+**Bug Fix**
+
+Fixed cleanup script to remove temporary "Force ZFS import first boot" UEFI boot entries after successful first boot.
+
+**The Problem:**
+- First boot creates temporary UEFI entries: "Ubuntu - Force ZFS import first boot (DriveName)"
+- After successful boot, cleanup script removed GRUB config and scripts
+- But temporary UEFI boot entries remained in firmware
+- Users saw confusing leftover entries in UEFI boot menu
+
+**The Solution:**
+- Added `efibootmgr` commands to cleanup script
+- Searches for boot entries containing "Force ZFS import first boot"
+- Removes all matching entries using `efibootmgr -b XXXX -B`
+- Logs how many entries were removed
+- Runs before EFI partition sync to ensure consistency
+
+**User Impact:**
+- Clean UEFI boot menu after first boot
+- Only permanent "Ubuntu-DriveName" entries remain
+- No more confusing "Force ZFS import first boot" entries
+- Better post-install experience
+
+----
+
 ## v6.8.1 - Consolidate prompts and remove hardcoded version references (2025-10-10)
 
 **User Experience Improvement + Bug Fix**

@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.8.1"
+readonly VERSION="6.8.2"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -3754,6 +3754,32 @@ if ! grep -q "zfs_force=1" /boot/grub/grub.cfg 2>/dev/null; then
     log_info "Verified: zfs_force=1 parameter removed from GRUB configuration"
 else
     log_warning "zfs_force=1 parameter still present in GRUB configuration"
+fi
+
+# Remove the temporary "Force ZFS import first boot" UEFI boot entries
+log_info "Removing temporary UEFI boot entries..."
+if command -v efibootmgr &>/dev/null; then
+    # Find and remove all boot entries containing "Force ZFS import first boot"
+    REMOVED_COUNT=0
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^Boot([0-9A-F]{4})\*?[[:space:]]+.*Force\ ZFS\ import\ first\ boot ]]; then
+            BOOT_NUM="${BASH_REMATCH[1]}"
+            if efibootmgr -b "$BOOT_NUM" -B >/dev/null 2>&1; then
+                log_info "✓ Removed temporary boot entry $BOOT_NUM"
+                REMOVED_COUNT=$((REMOVED_COUNT + 1))
+            else
+                log_warning "Failed to remove boot entry $BOOT_NUM"
+            fi
+        fi
+    done < <(efibootmgr)
+
+    if [[ $REMOVED_COUNT -gt 0 ]]; then
+        log_info "Removed $REMOVED_COUNT temporary boot entry/entries"
+    else
+        log_info "No temporary boot entries found (may have been removed already)"
+    fi
+else
+    log_warning "efibootmgr not available - cannot remove temporary boot entries"
 fi
 
 # Sync EFI partitions to ensure changes are applied to both drives

@@ -642,7 +642,7 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.8.1 - Consolidate prompts and remove hardcoded version references
+- **Script Version**: 6.8.2 - Remove temporary UEFI boot entries after first boot
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
