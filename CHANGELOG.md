@@ -1,5 +1,38 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.8.0 - Add Hardware Enablement (HWE) kernel support (2025-10-10)
+
+**Feature Enhancement**
+
+Added support for installing Ubuntu's Hardware Enablement (HWE) kernel for newer hardware support.
+
+**What is HWE?**
+- HWE kernels provide newer hardware drivers and features backported from newer Ubuntu releases
+- Desktop installations use HWE by default; server installations use GA (General Availability) kernel
+- Only available for LTS releases (currently noble/24.04)
+- HWE kernels are updated with each new Ubuntu series release
+
+**Implementation:**
+- New `--hwe` command line option to install HWE kernel (default is GA kernel)
+- Interactive prompt during installation if not specified (defaults to No/GA)
+- Only prompts for LTS releases (non-LTS releases always use standard kernel)
+- Clear explanation of GA vs HWE tradeoffs during prompt
+
+**Package Mapping:**
+- GA kernel: `linux-image-generic` + `linux-headers-generic` (default)
+- HWE kernel: `linux-generic-hwe-24.04` (for noble/24.04 LTS)
+
+**User Impact:**
+- Users with newer hardware can opt for HWE kernel for better support
+- Users wanting maximum stability can explicitly choose GA kernel
+- Clear documentation in usage and interactive prompts
+- Link to Canonical kernel documentation provided
+
+**References:**
+- https://canonical-kernel-docs.readthedocs-hosted.com/latest/reference/hwe-kernels/
+
+----
+
 ## v6.7.2 - CRITICAL: Restore zpool-based drive health checking (2025-10-10)
 
 **Critical Bug Fix - Regression from v6.4.0**

@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.7.2"
+readonly VERSION="6.8.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -598,7 +598,7 @@ usage() {
     echo -e "Original: ${ORIGINAL_REPO}"
     echo ""
     echo -e "${BOLD}Usage:${NC}"
-    echo "  ${SCRIPT_NAME} [--prepare] [--release=CODENAME] [--timezone=TIMEZONE] <hostname> <disk1> <disk2>"
+    echo "  ${SCRIPT_NAME} [--prepare] [--release=CODENAME] [--timezone=TIMEZONE] [--hwe] <hostname> <disk1> <disk2>"
     echo "  ${SCRIPT_NAME} --wipe-only <disk1> <disk2>"
     echo ""
     echo -e "${BOLD}Description:${NC}"
@@ -612,7 +612,11 @@ usage() {
     echo "                         Find releases: https://wiki.ubuntu.com/Releases"
     echo "  --timezone=TIMEZONE    Set timezone (e.g., --timezone=America/New_York) to skip prompt"
     echo "                         Valid timezones: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
-    echo "  --wipe-only           Just wipe drives without installing"
+    echo "  --hwe                  Install HWE (Hardware Enablement) kernel for newer hardware support"
+    echo "                         Only applies to LTS releases (noble/24.04). Default is GA kernel."
+    echo "                         If not specified, will prompt interactively."
+    echo "                         More info: https://canonical-kernel-docs.readthedocs-hosted.com/"
+    echo "  --wipe-only            Just wipe drives without installing"
     echo ""
     echo -e "${BOLD}Arguments:${NC}"
     echo "  hostname    Hostname for the new system (not needed for --wipe-only)"
@@ -1135,8 +1139,32 @@ configure_system_preferences() {
         USE_PERFORMANCE_TUNABLES=true
         log_info "Performance tunables will be applied"
     fi
-        
-    export USE_SERIAL_CONSOLE SERIAL_PORT SERIAL_SPEED SERIAL_UNIT USE_APPARMOR USE_PERFORMANCE_TUNABLES
+
+    # Ask about HWE kernel (only for LTS releases, if not already set by CLI)
+    if [[ "$UBUNTU_RELEASE" == "noble" && "${INSTALL_HWE_KERNEL}" == "false" ]]; then
+        # Interactive prompt (only if --hwe wasn't specified on command line)
+        echo ""
+        echo -e "${BOLD}Hardware Enablement (HWE) Kernel:${NC}"
+        echo -e "HWE kernels provide newer hardware support and drivers."
+        echo -e "Desktop installations use HWE by default; servers use the GA (General Availability) kernel."
+        echo -e "More info: ${CYAN}https://canonical-kernel-docs.readthedocs-hosted.com/latest/reference/hwe-kernels/${NC}"
+        echo -e ""
+        echo -e "  • GA kernel:  Stable, fewer updates, 5-year support"
+        echo -e "  • HWE kernel: Newer hardware support, updated with each Ubuntu release"
+        echo -en "${BOLD}Install HWE kernel instead of GA kernel? (y/N): ${NC}"
+        read -r response
+        if [[ "${response}" =~ ^[Yy]$ ]]; then
+            INSTALL_HWE_KERNEL=true
+            log_info "HWE kernel will be installed (linux-generic-hwe-24.04)"
+        else
+            INSTALL_HWE_KERNEL=false
+            log_info "GA kernel will be installed (linux-generic)"
+        fi
+    elif [[ "${INSTALL_HWE_KERNEL}" == "true" ]]; then
+        log_info "HWE kernel will be installed (linux-generic-hwe-24.04) [--hwe specified]"
+    fi
+
+    export USE_SERIAL_CONSOLE SERIAL_PORT SERIAL_SPEED SERIAL_UNIT USE_APPARMOR USE_PERFORMANCE_TUNABLES INSTALL_HWE_KERNEL
     return 0
 }
 
@@ -1607,6 +1635,13 @@ USER_TIMEZONE=""
 if [[ "$1" == --timezone=* ]]; then
     USER_TIMEZONE="${1#--timezone=}"
     shift  # Remove --timezone from arguments
+fi
+
+# Check for --hwe option (Hardware Enablement kernel)
+INSTALL_HWE_KERNEL=false
+if [[ "$1" == "--hwe" ]]; then
+    INSTALL_HWE_KERNEL=true
+    shift  # Remove --hwe from arguments
 fi
 
 # Check for wipe-only mode
@@ -2235,11 +2270,19 @@ mkdir -p /boot/efi
 mount "${PART1_EFI}" /boot/efi
 
 # Install kernel and bootloader
-DEBIAN_FRONTEND=noninteractive apt-get install --yes \
+# Determine kernel package based on HWE selection
+if [[ "${INSTALL_HWE_KERNEL:-false}" == "true" ]]; then
+    KERNEL_PACKAGE="linux-generic-hwe-24.04"
+    log_info "Installing HWE kernel: $KERNEL_PACKAGE"
+else
+    KERNEL_PACKAGE="linux-image-generic linux-headers-generic"
+    log_info "Installing GA kernel: $KERNEL_PACKAGE"
+fi
+
+DEBIAN_FRONTEND=noninteractive apt-get install --yes --install-recommends \
     grub-efi-amd64 \
     grub-efi-amd64-signed \
-    linux-image-generic \
-    linux-headers-generic \
+    ${KERNEL_PACKAGE} \
     shim-signed \
     zfs-initramfs
 
