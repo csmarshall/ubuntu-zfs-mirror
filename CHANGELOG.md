@@ -1,5 +1,40 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.7.0 - Add --release parameter for multiple Ubuntu versions (2025-10-10)
+
+**Major Enhancement**
+
+Added `--release=CODENAME` parameter to install different Ubuntu versions.
+
+**Supported Releases:**
+- **noble** (24.04 LTS) - Default, long-term support until 2029
+- **oracular** (24.10) - Interim release
+- **plucky** (25.04) - Interim release
+- **questing** (25.10) - Latest release
+
+**Usage:**
+```bash
+# Install Ubuntu 24.04 LTS (default)
+./zfs_mirror_setup.sh myserver /dev/disk/by-id/... /dev/disk/by-id/...
+
+# Install Ubuntu 25.10 (latest)
+./zfs_mirror_setup.sh --release=questing myserver /dev/disk/by-id/... /dev/disk/by-id/...
+```
+
+**Technical Changes:**
+- Replaced hardcoded "noble" with `$UBUNTU_RELEASE` variable
+- Added release validation in argument parsing
+- Updated debootstrap and APT sources to use variable release
+
+**User Impact:**
+- Can now install any recent Ubuntu version with ZFS mirror root
+- Defaults to stable LTS release (24.04)
+- Useful for testing newer releases or matching Live USB version
+
+**Note:** LTS releases (*.04) are recommended for production servers.
+
+----
+
 ## v6.6.1 - Add nofail to fstab entries for degraded boot (2025-10-09)
 
 **Enhancement**

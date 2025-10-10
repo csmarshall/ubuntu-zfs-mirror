@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.6.1"
+readonly VERSION="6.7.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -598,15 +598,17 @@ usage() {
     echo -e "Original: ${ORIGINAL_REPO}"
     echo ""
     echo -e "${BOLD}Usage:${NC}"
-    echo "  ${SCRIPT_NAME} [--prepare] [--timezone=TIMEZONE] <hostname> <disk1> <disk2>"
+    echo "  ${SCRIPT_NAME} [--prepare] [--release=CODENAME] [--timezone=TIMEZONE] <hostname> <disk1> <disk2>"
     echo "  ${SCRIPT_NAME} --wipe-only <disk1> <disk2>"
     echo ""
     echo -e "${BOLD}Description:${NC}"
-    echo "  Creates a ZFS root mirror on two drives for Ubuntu 24.04 Server."
+    echo "  Creates a ZFS root mirror on two drives for Ubuntu Server."
     echo "  Both drives will be bootable with automatic failover capability."
     echo ""
     echo -e "${BOLD}Options:${NC}"
     echo "  --prepare              Wipe drives completely before installation (recommended)"
+    echo "  --release=CODENAME     Ubuntu release to install (default: noble)"
+    echo "                         Supported: noble (24.04 LTS), oracular (24.10), plucky (25.04), questing (25.10)"
     echo "  --timezone=TIMEZONE    Set timezone (e.g., --timezone=America/New_York) to skip prompt"
     echo "                         Valid timezones: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
     echo "  --wipe-only           Just wipe drives without installing"
@@ -1574,6 +1576,29 @@ if [[ "$1" == "--prepare" ]]; then
     shift  # Remove --prepare from arguments
 fi
 
+# Check for --release option
+UBUNTU_RELEASE="noble"  # Default to 24.04 LTS
+if [[ "$1" == --release=* ]]; then
+    UBUNTU_RELEASE="${1#--release=}"
+    shift  # Remove --release from arguments
+
+    # Validate release codename
+    case "$UBUNTU_RELEASE" in
+        noble|oracular|plucky|questing)
+            log_info "Installing Ubuntu ${UBUNTU_RELEASE}"
+            ;;
+        *)
+            log_error "Unsupported Ubuntu release: ${UBUNTU_RELEASE}"
+            log_error "Supported releases:"
+            log_error "  - noble (24.04 LTS)"
+            log_error "  - oracular (24.10)"
+            log_error "  - plucky (25.04)"
+            log_error "  - questing (25.10 - latest)"
+            exit 1
+            ;;
+    esac
+fi
+
 # Check for --timezone option
 USER_TIMEZONE=""
 if [[ "$1" == --timezone=* ]]; then
@@ -2032,7 +2057,7 @@ show_progress 6 10 "Installing base system..."
 
 # Install Ubuntu base system
 log_info "Installing Ubuntu base system with debootstrap..."
-if ! debootstrap noble /mnt; then
+if ! debootstrap "${UBUNTU_RELEASE}" /mnt; then
     log_error "Failed to install Ubuntu base system"
     exit 1
 fi
@@ -2071,11 +2096,11 @@ network:
 EOF
 
 # Configure APT sources
-cat << 'EOF' > /mnt/etc/apt/sources.list
-deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
-deb http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+cat > /mnt/etc/apt/sources.list << EOF
+deb http://archive.ubuntu.com/ubuntu ${UBUNTU_RELEASE} main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu ${UBUNTU_RELEASE}-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu ${UBUNTU_RELEASE}-backports main restricted universe multiverse
+deb http://security.ubuntu.com/ubuntu ${UBUNTU_RELEASE}-security main restricted universe multiverse
 EOF
 
 show_progress 8 10 "Configuring system in chroot..."
