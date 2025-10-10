@@ -1,5 +1,48 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.8.5 - Add grub-install protection wrapper (2025-10-10)
+
+**Enhancement + Foundation for Future Boot Management**
+
+Added dpkg-divert wrapper to protect against errant grub-install runs corrupting UEFI boot entries.
+
+**The Problem:**
+- `grub-install` automatically creates/modifies UEFI NVRAM boot entries
+- Package updates trigger grub-install automatically
+- Manual grub-install runs can corrupt carefully managed boot entries
+- Difficult to maintain consistent boot entry configuration
+
+**The Solution:**
+- Install dpkg-divert wrapper during installation
+- Wrapper intercepts all grub-install calls and adds `--no-nvram` flag
+- Prevents UEFI NVRAM modifications while still installing bootloader files
+- Survives package updates (dpkg-divert is persistent)
+
+**Implementation:**
+- Added wrapper setup after chroot configuration (lines 2598-2615)
+- Real grub-install moved to `/usr/sbin/grub-install.real`
+- Wrapper at `/usr/sbin/grub-install` always adds `--no-nvram`
+- Works for all invocations: apt, manual, scripts
+
+**User Impact:**
+- Boot entries remain stable and predictable
+- No surprise boot entry changes during updates
+- Foundation for future automated boot entry rotation (v6.9.0)
+- Existing installations can manually apply wrapper (see ROSA_MANUAL_UPGRADE.md)
+
+**Future Work:**
+- v6.9.0 will add three-entry boot menu design:
+  - "Ubuntu - Rotating (DriveName)" - Alternates between drives
+  - "Ubuntu - Drive1Name" - Always first drive
+  - "Ubuntu - Drive2Name" - Always second drive
+- Automatic rotation logic in sync scripts
+- Boot entry cleanup and validation
+
+**Files Added:**
+- `ROSA_MANUAL_UPGRADE.md` - Manual upgrade instructions for existing installations
+
+----
+
 ## v6.8.4 - Fix heredoc variable escaping in generated scripts (2025-10-10)
 
 **Critical Bug Fix**
