@@ -1,5 +1,58 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.10.1 - Fix blkid hang and regex matching in boot entry creation (2025-10-10)
+
+**Critical Bug Fixes**
+
+Fixed multiple issues preventing boot entry creation and validation from working correctly.
+
+**Issue 1: blkid hang**
+- Boot entry creation code tried to find EFI partition using `blkid --match-token UUID=... --match-token PARTUUID=...`
+- Matching both UUID (filesystem, shared) and PARTUUID (partition, unique) simultaneously doesn't work
+- `blkid` would hang indefinitely waiting for a match that can't exist
+- Script would freeze during boot entry validation
+- Affected both normal mode and shutdown rotation section (line 3368)
+
+**Issue 2: Regex not matching created entries**
+- After creating boot entries, script couldn't find them to record their numbers
+- Regex expected label at end of line: `${LABEL}$`
+- But efibootmgr output has whitespace + HD path after label
+- Result: STATIC1_ENTRY and STATIC2_ENTRY stayed empty
+- Logged "Created: Boot" with no number
+- Boot order not set (needs all three entry numbers)
+- Duplicate entries created on each run
+
+**The Solution:**
+- Simplified logic: use partition path directly (`${DRIVE}-part1`)
+- Removed all `blkid` lookups - we already know the partitions
+- Fixed regex to match whitespace after label: `${LABEL}[[:space:]]` instead of `${LABEL}$`
+- Fixed in 4 locations: initial detection (2x) and after creation (2x)
+- Mount partition directly to extract Ubuntu-* label
+
+**Changes:**
+- Lines 3114-3132: Simplified drive label discovery (removed blkid)
+- Line 3151: Fixed STATIC1 detection regex
+- Line 3159: Fixed STATIC2 detection regex
+- Line 3201: Fixed STATIC1 creation verification regex
+- Line 3221: Fixed STATIC2 creation verification regex
+- Lines 3364-3378: Fixed cleanup section label discovery (removed blkid)
+- Line 3384: Fixed cleanup section static entry matching regex
+
+**User Impact:**
+- v6.10.0 would hang on rosa when running sync-mirror-boot
+- v6.10.1 completes immediately without hanging
+- Boot entry numbers now captured correctly
+- Boot order gets set properly
+- No duplicate entries created
+
+**Testing:**
+```bash
+sudo /usr/local/bin/sync-mirror-boot  # Should complete in ~2 seconds
+efibootmgr  # Should show three entries with proper boot order
+```
+
+----
+
 ## v6.10.0 - Multi-Architecture Support (2025-10-10)
 
 **Feature Addition: x86_64 and aarch64 Support**
