@@ -1,5 +1,29 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.7.1 - Skip EUI/WWN identifiers for better drive naming (2025-10-10)
+
+**Bug Fix**
+
+Fixed device-to-by-id resolution to skip EUI and WWN identifiers, preferring model/serial identifiers for better drive naming.
+
+**The Problem:**
+- NVMe drives can have multiple by-id identifiers: model/serial, EUI, WWN
+- EUI identifiers (`nvme-eui.002538415142c07a`) sort alphabetically before model identifiers
+- Resolution loop was finding EUI path first
+- `get_drive_identifier()` couldn't parse EUI format, fell back to "Disk-c07a"
+
+**The Solution:**
+- Skip `nvme-eui.*` and `wwn-*` identifiers in resolution loop
+- Prefer model/serial format: `nvme-Samsung_SSD_990_PRO_1TB_S7LANJ0Y118363M`
+- Results in meaningful EFI folder names: `Ubuntu-Samsung-SSD-990-363M`
+
+**User Impact:**
+- Drive names are now consistently based on model/serial
+- EFI bootloader folders have meaningful names
+- No more "Ubuntu-Disk-xxxx" fallback names
+
+----
+
 ## v6.7.0 - Add --release parameter for multiple Ubuntu versions (2025-10-10)
 
 **Major Enhancement**

@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.7.0"
+readonly VERSION="6.7.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2627,11 +2627,16 @@ for efi_part in "${EFI_PARTITIONS[@]}"; do
         device_base="${BASH_REMATCH[1]}"
 
         # Find the by-id link that points to this device base
+        # Prefer model/serial identifiers over EUI/WWN identifiers for better naming
         by_id_path=""
         for link in /dev/disk/by-id/*; do
             # Skip partition links
             [[ "$link" =~ -part[0-9]+$ ]] && continue
             [[ "$link" =~ p[0-9]+$ ]] && continue
+
+            # Skip EUI and WWN identifiers (prefer model/serial for better naming)
+            [[ "$link" =~ nvme-eui\. ]] && continue
+            [[ "$link" =~ wwn- ]] && continue
 
             # Check if this link points to our device
             if [[ -L "$link" ]]; then
