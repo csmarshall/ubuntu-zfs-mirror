@@ -1,5 +1,92 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.9.0 - Three-Entry Boot Menu with Automatic Rotation (2025-10-10)
+
+**Major Enhancement: Intelligent Boot Entry Management**
+
+Implemented three-entry boot menu design with automatic rotation on every shutdown/reboot, ensuring both drives are regularly tested and load-balanced.
+
+**The Design:**
+
+Three UEFI boot entries per system:
+1. **"Ubuntu - Rotating (DriveName)"** - Default entry, automatically alternates between drives
+2. **"Ubuntu - Drive1Name"** - Static entry always pointing to first drive (manual fallback)
+3. **"Ubuntu - Drive2Name"** - Static entry always pointing to second drive (manual fallback)
+
+**How It Works:**
+
+1. **Normal Mode** (`sync-mirror-boot`):
+   - Runs on kernel updates, initramfs updates, manual GRUB updates
+   - Syncs GRUB bootloader to ALL drives
+   - Does NOT rotate boot entry (too frequent)
+
+2. **Shutdown Mode** (`sync-mirror-boot --shutdown`):
+   - Runs automatically before every shutdown/reboot
+   - Syncs GRUB bootloader to ALL drives
+   - Rotates the "Rotating" entry to point to the OTHER drive
+   - Cleans up old/unexpected Ubuntu boot entries
+   - Next boot will use the other drive
+   - If drive is DEGRADED, rotation is skipped (keeps healthy drive)
+
+**Benefits:**
+
+- **Automatic Load Balancing**: Every reboot uses different drive, balancing wear
+- **Early Failure Detection**: Both boot paths tested regularly
+- **Manual Fallback**: Static entries provide manual override if rotating entry fails
+- **Resilient**: Gracefully handles degraded pools by skipping rotation
+- **Drive-Agnostic**: Automatically discovers drives from zpool status
+- **Self-Cleaning**: Removes old/duplicate Ubuntu entries, keeping UEFI menu clean
+
+**Implementation:**
+
+1. **Removed `sync-efi-partitions`** - Redundant with grub-install to all drives
+2. **Enhanced `sync-mirror-boot`**:
+   - Added `--shutdown` flag for rotation mode
+   - Added intelligent drive discovery from zpool
+   - Added PARTUUID-based boot entry management
+   - Added automatic label detection from EFI folders
+   - Added cleanup of old/unexpected Ubuntu boot entries
+   - Full error handling and degraded pool detection
+3. **Updated shutdown service**:
+   - Changed to call `sync-mirror-boot --shutdown`
+   - Now rotates boot entry on every shutdown
+4. **Updated all references**:
+   - Removed sync-efi-partitions from documentation
+   - Updated recovery guide commands
+   - Simplified utility script list
+
+**User Impact:**
+
+- **Fresh Installations**: Get three-entry boot menu with automatic rotation
+- **Existing Installations**: Need manual upgrade (see ROSA_MANUAL_UPGRADE.md)
+- **Every Reboot**: Automatically tests both drives' boot paths
+- **One Command**: `sudo /usr/local/bin/sync-mirror-boot` does everything
+- **Shutdown Rotation**: Happens automatically, no user action needed
+
+**Technical Details:**
+
+- Boot entry rotation discovers drives from `zpool status rpool`
+- Uses PARTUUID to uniquely identify each drive's EFI partition
+- Mounts target drive temporarily to discover EFI folder name
+- Removes old rotating entry, creates new one pointing to other drive
+- Discovers expected static entry names from drive labels
+- Removes any Ubuntu entries that don't match expected pattern (cleanup)
+- Preserves static entries and non-Ubuntu boot entries (USB, Shell, etc.)
+- Sets boot order: Rotating first, static entries second, others last
+
+**Files Modified:**
+- `zfs_mirror_setup.sh`: Removed sync-efi-partitions, enhanced sync-mirror-boot with rotation
+- `CHANGELOG.md`: This entry
+
+**Files Removed:**
+- `sync-efi-partitions` script creation (replaced by grub-install to all drives)
+
+**Migration Path:**
+- New installations: Automatically get v6.9.0 features
+- Existing installations: Follow ROSA_MANUAL_UPGRADE.md to add three-entry boot menu
+
+----
+
 ## v6.8.5 - Add grub-install protection wrapper (2025-10-10)
 
 **Enhancement + Foundation for Future Boot Management**

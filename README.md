@@ -6,7 +6,21 @@ Enhanced version of the Ubuntu ZFS mirror root installation script with producti
 
 This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with full redundancy and automatic failover capability. Both drives will be bootable with UEFI support.
 
-**⚠️ INTENDED USE CASE**: This script is designed for **dedicated Ubuntu server installations** where Ubuntu is the only operating system. It is **NOT suitable for dual-boot or multi-boot setups** with Windows, other *nix/BSD systems, or other Linux distributions. The automatic boot order management prioritizes Ubuntu entries and may interfere with other operating systems.
+**⚠️ INTENDED USE CASE - SINGLE-OS SYSTEMS ONLY**: This script is designed exclusively for **dedicated Ubuntu server installations** where Ubuntu is the **only** operating system on the machine.
+
+**NOT SUITABLE FOR:**
+- **Dual-boot setups** (Windows + Ubuntu, macOS + Ubuntu, etc.)
+- **Multi-boot configurations** (multiple Linux distributions, BSD, etc.)
+- **Shared boot drives** with other operating systems
+- **Desktop systems** where you plan to install additional operating systems
+
+**Why single-OS only:**
+- Automatic boot entry management creates and rotates Ubuntu-specific UEFI entries
+- Boot entry cleanup removes unexpected entries to maintain system integrity
+- Three-entry boot menu assumes full control of boot order
+- Shutdown hooks modify UEFI NVRAM on every reboot
+
+**If you need dual-boot or multi-OS support, this script is NOT for you.**
 
 **KISS Implementation**: Following the "Keep It Simple and Stupid" principle, this script uses a straightforward single-pool architecture that eliminates complex dual-pool designs and cleanup procedures for maximum reliability and maintainability.
 
