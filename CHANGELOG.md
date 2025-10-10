@@ -1,5 +1,57 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.7.2 - CRITICAL: Restore zpool-based drive health checking (2025-10-10)
+
+**Critical Bug Fix - Regression from v6.4.0**
+
+Restored zpool-based drive discovery to ensure GRUB sync only targets ONLINE drives in the mirror.
+
+**The Problem:**
+- In v6.4.0, the sync-grub-to-mirror-drives rewrite replaced zpool-based drive discovery with blkid-based discovery
+- This was a **regression** - the script lost the ability to check drive health
+- Result: Script would try to sync to FAILED/DEGRADED drives, causing mount failures and errors
+- If a drive failed, the sync script would still try to access its EFI partition
+
+**The Original Design (v5.0.1 - v6.0.0):**
+- Used `zpool status rpool` to discover drives
+- Only synced to drives showing ONLINE status
+- Automatically skipped failed/degraded drives
+
+**What Broke in v6.4.0:**
+- Complete rewrite to support drive-specific EFI folders
+- Changed to blkid-based discovery (find all EFI partitions by UUID)
+- Lost the zpool health checking in the process
+
+**The Solution:**
+- Restore zpool as the **source of truth** for healthy drives
+- Use `zpool status rpool` to find ONLINE drives (identifies -part3 partitions)
+- Use blkid to find all EFI partitions (identifies -part1 partitions)
+- **Filter** blkid results to only include EFI partitions on ONLINE drives
+- Skip any drives showing DEGRADED, UNAVAIL, FAULTED, or OFFLINE
+
+**Technical Implementation:**
+1. Query `zpool status rpool` and extract ONLINE drives with -part3 suffix
+2. Strip -part3 to get base drive paths (e.g., `nvme-Samsung_SSD_990_PRO_1TB_...`)
+3. Query blkid for all EFI partitions by UUID
+4. For each EFI partition, resolve to its base drive
+5. Only include EFI partitions whose base drive is in the ONLINE list
+6. Sync GRUB only to filtered EFI partitions
+
+**User Impact:**
+- ✅ Script now gracefully handles drive failures during sync
+- ✅ Won't try to mount EFI partitions on failed drives
+- ✅ Degraded arrays can still sync to remaining healthy drive(s)
+- ✅ Prevents sync errors that could confuse users or mask real issues
+- ✅ Maintains the original design intent for resilient mirror management
+
+**Why This Matters:**
+- The whole point of ZFS mirroring is drive redundancy
+- Sync scripts MUST be resilient to drive failures
+- This was working correctly until v6.4.0's rewrite
+- Now restored to original robust behavior
+
+----
+
 ## v6.7.1 - Skip EUI/WWN identifiers for better drive naming (2025-10-10)
 
 **Bug Fix**
