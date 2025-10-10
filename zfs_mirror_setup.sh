@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.8.2"
+readonly VERSION="6.8.3"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2220,6 +2220,58 @@ cat << 'CHROOT_SCRIPT' > /mnt/tmp/configure_system.sh
 #!/bin/bash
 set -euo pipefail
 
+# ============================================================================
+# CHROOT ENVIRONMENT VALIDATION
+# ============================================================================
+# This validation ensures all variables needed in the chroot environment are
+# properly exported from the parent script. If you add new variables to the
+# chroot script, make sure they are:
+# 1. Listed in the required_vars array below
+# 2. Exported in the parent script's chroot invocation (around line 2495)
+#
+# This catches "unbound variable" errors immediately instead of failing
+# partway through installation.
+# ============================================================================
+
+validate_chroot_environment() {
+    local missing=()
+    local required_vars=(
+        "ADMIN_USER"
+        "ADMIN_PASS"
+        "EFI_VOLUME_ID"
+        "DEFAULT_INTERFACE"
+        "TRIM_ENABLED"
+        "TIMEZONE"
+        "UBUNTU_RELEASE"
+        "INSTALL_HWE_KERNEL"
+        "USE_SERIAL_CONSOLE"
+        "USE_APPARMOR"
+        "USE_PERFORMANCE_TUNABLES"
+    )
+
+    echo "Validating chroot environment variables..."
+
+    for var in "${required_vars[@]}"; do
+        if [[ -z "${!var+x}" ]]; then
+            missing+=("$var")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "ERROR: Required variables not set in chroot environment:"
+        printf '  - %s\n' "${missing[@]}"
+        echo ""
+        echo "These variables must be exported in the parent script's chroot invocation."
+        echo "Check the variable export list around line 2495 in the main script."
+        exit 1
+    fi
+
+    echo "✓ All required chroot variables are set"
+}
+
+# Run validation before doing anything else
+validate_chroot_environment
+
 # Logging in chroot
 ts() { date +'%F %T'; }
 log_info() { echo "$(ts) CHROOT INFO: $*"; }
@@ -2496,6 +2548,8 @@ chroot /mnt /usr/bin/env \
     DEFAULT_INTERFACE="${DEFAULT_INTERFACE}" \
     TRIM_ENABLED="${TRIM_ENABLED}" \
     TIMEZONE="${TIMEZONE}" \
+    UBUNTU_RELEASE="${UBUNTU_RELEASE}" \
+    INSTALL_HWE_KERNEL="${INSTALL_HWE_KERNEL:-false}" \
     USE_SERIAL_CONSOLE="${USE_SERIAL_CONSOLE:-false}" \
     SERIAL_PORT="${SERIAL_PORT:-ttyS1}" \
     SERIAL_SPEED="${SERIAL_SPEED:-115200}" \

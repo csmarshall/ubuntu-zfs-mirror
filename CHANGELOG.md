@@ -1,5 +1,40 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.8.3 - Add chroot environment validation and fix missing exports (2025-10-10)
+
+**Critical Bug Fix + Prevention**
+
+Fixed missing variable exports to chroot environment and added validation to prevent this class of bugs in the future.
+
+**The Problem:**
+- `UBUNTU_RELEASE` and `INSTALL_HWE_KERNEL` were not exported to chroot environment
+- Installation failed during kernel installation with "unbound variable" error
+- This is the second time this type of issue has occurred
+- No way to catch these errors before running full installation
+
+**The Solution:**
+- Added `UBUNTU_RELEASE` and `INSTALL_HWE_KERNEL` to chroot variable exports
+- Created `validate_chroot_environment()` function at start of chroot script
+- Lists all required variables with clear documentation
+- Fails immediately with helpful error message if any variable is missing
+- Guides developers where to add new variables when extending the script
+
+**Prevention for Future:**
+- Clear comment block explaining the validation purpose
+- Instructions for adding new chroot variables:
+  1. Add to required_vars array in validation function
+  2. Add to export list in parent script (around line 2495)
+- Catches "unbound variable" errors at chroot start, not partway through
+- Makes it impossible to forget exporting new variables
+
+**User Impact:**
+- Installation no longer fails partway through with cryptic errors
+- Clear error messages if configuration is incorrect
+- Easier for contributors to extend the script correctly
+- Self-documenting variable requirements
+
+----
+
 ## v6.8.2 - Remove temporary UEFI boot entries after first boot (2025-10-10)
 
 **Bug Fix**
