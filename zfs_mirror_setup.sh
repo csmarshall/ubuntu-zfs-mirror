@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.8.0"
+readonly VERSION="6.8.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -1141,7 +1141,25 @@ configure_system_preferences() {
     fi
 
     # Ask about HWE kernel (only for LTS releases, if not already set by CLI)
-    if [[ "$UBUNTU_RELEASE" == "noble" && "${INSTALL_HWE_KERNEL}" == "false" ]]; then
+    # Determine if this is an LTS release that supports HWE
+    HWE_SUPPORTED=false
+    HWE_VERSION=""
+    case "$UBUNTU_RELEASE" in
+        noble)
+            HWE_SUPPORTED=true
+            HWE_VERSION="24.04"
+            ;;
+        jammy)
+            HWE_SUPPORTED=true
+            HWE_VERSION="22.04"
+            ;;
+        focal)
+            HWE_SUPPORTED=true
+            HWE_VERSION="20.04"
+            ;;
+    esac
+
+    if [[ "$HWE_SUPPORTED" == "true" && "${INSTALL_HWE_KERNEL}" == "false" ]]; then
         # Interactive prompt (only if --hwe wasn't specified on command line)
         echo ""
         echo -e "${BOLD}Hardware Enablement (HWE) Kernel:${NC}"
@@ -1155,13 +1173,18 @@ configure_system_preferences() {
         read -r response
         if [[ "${response}" =~ ^[Yy]$ ]]; then
             INSTALL_HWE_KERNEL=true
-            log_info "HWE kernel will be installed (linux-generic-hwe-24.04)"
+            log_info "HWE kernel will be installed (linux-generic-hwe-${HWE_VERSION})"
         else
             INSTALL_HWE_KERNEL=false
             log_info "GA kernel will be installed (linux-generic)"
         fi
     elif [[ "${INSTALL_HWE_KERNEL}" == "true" ]]; then
-        log_info "HWE kernel will be installed (linux-generic-hwe-24.04) [--hwe specified]"
+        if [[ "$HWE_SUPPORTED" == "true" ]]; then
+            log_info "HWE kernel will be installed (linux-generic-hwe-${HWE_VERSION}) [--hwe specified]"
+        else
+            log_warning "HWE not supported for $UBUNTU_RELEASE (non-LTS), will install GA kernel"
+            INSTALL_HWE_KERNEL=false
+        fi
     fi
 
     export USE_SERIAL_CONSOLE SERIAL_PORT SERIAL_SPEED SERIAL_UNIT USE_APPARMOR USE_PERFORMANCE_TUNABLES INSTALL_HWE_KERNEL
@@ -1796,11 +1819,62 @@ if ! check_prerequisites; then
     exit 1
 fi
 
-if ! configure_system_preferences; then
-    exit 1
-fi
+# Collect ALL configuration from user upfront before any destructive operations
+collect_all_configuration() {
+    log_header "Installation Configuration"
+    echo "This installer will collect all configuration settings before starting."
+    echo "Please answer the following questions about your system setup."
+    echo ""
 
-if ! create_admin_user; then
+    # System configuration preferences
+    if ! configure_system_preferences; then
+        return 1
+    fi
+
+    # Admin user creation
+    if ! create_admin_user; then
+        return 1
+    fi
+
+    # Swap size
+    SWAP_SIZE=$(prompt_swap_size)
+    log_info "Swap size selected: ${SWAP_SIZE}"
+    export SWAP_SIZE
+
+    # Timezone
+    if [[ -n "${USER_TIMEZONE}" ]]; then
+        if [[ -f "/usr/share/zoneinfo/${USER_TIMEZONE}" ]]; then
+            TIMEZONE="${USER_TIMEZONE}"
+            log_info "Using timezone from command line: ${TIMEZONE}"
+        else
+            log_warning "Invalid timezone '${USER_TIMEZONE}' provided. Will prompt for selection."
+            TIMEZONE=$(prompt_timezone)
+            log_info "Timezone selected: ${TIMEZONE}"
+        fi
+    else
+        TIMEZONE=$(prompt_timezone)
+        log_info "Timezone selected: ${TIMEZONE}"
+    fi
+    export TIMEZONE
+
+    # Additional datasets
+    ADDITIONAL_DATASETS=$(prompt_additional_datasets)
+    if [[ -n "${ADDITIONAL_DATASETS}" ]]; then
+        log_info "Additional datasets selected: ${ADDITIONAL_DATASETS}"
+    else
+        log_info "Using default dataset layout only"
+    fi
+    export ADDITIONAL_DATASETS
+
+    echo ""
+    log_info "✓ All configuration collected"
+    log_info "Installation will now proceed non-interactively"
+    echo ""
+
+    return 0
+}
+
+if ! collect_all_configuration; then
     exit 1
 fi
 
@@ -1878,43 +1952,6 @@ fi
 if ! perform_pre_destruction_analysis; then
     exit 1
 fi
-
-# ============================================================================
-# CENTRALIZED CONFIGURATION COLLECTION
-# ============================================================================
-# Collect ALL user configuration before starting any destructive operations
-log_header "Configuration Options"
-
-# Get swap size from user
-SWAP_SIZE=$(prompt_swap_size)
-log_info "Swap size selected: ${SWAP_SIZE}"
-
-# Get timezone from user (or use command-line argument)
-if [[ -n "${USER_TIMEZONE}" ]]; then
-    # Validate provided timezone
-    if [[ -f "/usr/share/zoneinfo/${USER_TIMEZONE}" ]]; then
-        TIMEZONE="${USER_TIMEZONE}"
-        log_info "Using timezone from command line: ${TIMEZONE}"
-    else
-        log_warning "Invalid timezone '${USER_TIMEZONE}' provided. Will prompt for selection."
-        TIMEZONE=$(prompt_timezone)
-        log_info "Timezone selected: ${TIMEZONE}"
-    fi
-else
-    TIMEZONE=$(prompt_timezone)
-    log_info "Timezone selected: ${TIMEZONE}"
-fi
-
-# Get additional datasets from user
-ADDITIONAL_DATASETS=$(prompt_additional_datasets)
-if [[ -n "${ADDITIONAL_DATASETS}" ]]; then
-    log_info "Additional datasets selected: ${ADDITIONAL_DATASETS}"
-else
-    log_info "Using default dataset layout only"
-fi
-
-log_info "All configuration collected. Installation will proceed non-interactively."
-echo ""
 
 # If --prepare was specified, wipe drives first
 if [[ "${USE_PREPARE}" == "true" ]]; then
@@ -2270,9 +2307,25 @@ mkdir -p /boot/efi
 mount "${PART1_EFI}" /boot/efi
 
 # Install kernel and bootloader
-# Determine kernel package based on HWE selection
+# Determine kernel package based on HWE selection and release
 if [[ "${INSTALL_HWE_KERNEL:-false}" == "true" ]]; then
-    KERNEL_PACKAGE="linux-generic-hwe-24.04"
+    # Map release codename to version for HWE package naming
+    case "$UBUNTU_RELEASE" in
+        noble)
+            HWE_VERSION="24.04"
+            ;;
+        jammy)
+            HWE_VERSION="22.04"
+            ;;
+        focal)
+            HWE_VERSION="20.04"
+            ;;
+        *)
+            log_error "HWE kernel not available for release: $UBUNTU_RELEASE"
+            exit 1
+            ;;
+    esac
+    KERNEL_PACKAGE="linux-generic-hwe-${HWE_VERSION}"
     log_info "Installing HWE kernel: $KERNEL_PACKAGE"
 else
     KERNEL_PACKAGE="linux-image-generic linux-headers-generic"

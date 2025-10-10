@@ -642,10 +642,18 @@ MIT License - See original repository for details.
 - **Enhanced Version**: https://claude.ai - Production-ready fixes
 
 ### Technical Specifications
-- **Script Version**: 6.8.0 - Add Hardware Enablement (HWE) kernel support
+- **Script Version**: 6.8.1 - Consolidate prompts and remove hardcoded version references
 - **License**: MIT
 - **Drive Support**: NVMe, SATA SSD, SATA HDD, SAS, and other drive types
 - **Ubuntu Repositories**: Uses official archive.ubuntu.com and security.ubuntu.com
+
+### Supported Ubuntu Releases
+- **noble (24.04 LTS)** - Recommended, HWE kernel supported
+- **oracular (24.10)** - Interim release, no HWE
+- **plucky (25.04)** - Interim release, no HWE
+- **questing (25.10)** - Latest, no HWE
+
+**Note for future LTS releases**: When a new Ubuntu LTS is released, the HWE kernel mapping must be updated in the script. Search for the `HWE_VERSION` case statement in `configure_system_preferences()` and the kernel installation section, and add the new LTS codename with its corresponding version number (e.g., `jammy` → `22.04`, `noble` → `24.04`).
 
 ### Key Technical Features
 - **GRUB2 Compatibility**: Boot pool configured with `compatibility=grub2`

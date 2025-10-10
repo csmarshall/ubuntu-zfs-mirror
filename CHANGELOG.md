@@ -1,5 +1,38 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.8.1 - Consolidate prompts and remove hardcoded version references (2025-10-10)
+
+**User Experience Improvement + Bug Fix**
+
+Consolidated all user prompts into a single block at the beginning, and removed hardcoded Ubuntu version references to support future LTS releases.
+
+**User Prompt Consolidation:**
+- Created unified `collect_all_configuration()` function
+- All prompts now happen together at the start:
+  1. System preferences (serial console, AppArmor, performance, HWE)
+  2. Admin user (username, password, SSH key)
+  3. Swap size
+  4. Timezone
+  5. Additional datasets
+- Clear message: "✓ All configuration collected - Installation will now proceed non-interactively"
+- No more split prompts or surprises later during installation
+
+**Hardcoded Version Removal:**
+- HWE kernel package name was hardcoded to `linux-generic-hwe-24.04`
+- Now dynamically maps release codename to version:
+  - `noble` → `24.04`
+  - `jammy` → `22.04`
+  - `focal` → `20.04`
+- Supports current and future LTS releases with HWE kernels
+- Added documentation in README for updating when new LTS releases come out
+
+**User Impact:**
+- Better installation flow - all questions upfront, then non-interactive
+- Script works with any supported LTS release without hardcoded version numbers
+- Clear upgrade path documented for future maintainers
+
+----
+
 ## v6.8.0 - Add Hardware Enablement (HWE) kernel support (2025-10-10)
 
 **Feature Enhancement**
