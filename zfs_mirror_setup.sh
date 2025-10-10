@@ -609,6 +609,7 @@ usage() {
     echo "  --prepare              Wipe drives completely before installation (recommended)"
     echo "  --release=CODENAME     Ubuntu release to install (default: noble)"
     echo "                         Supported: noble (24.04 LTS), oracular (24.10), plucky (25.04), questing (25.10)"
+    echo "                         Find releases: https://wiki.ubuntu.com/Releases"
     echo "  --timezone=TIMEZONE    Set timezone (e.g., --timezone=America/New_York) to skip prompt"
     echo "                         Valid timezones: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
     echo "  --wipe-only           Just wipe drives without installing"

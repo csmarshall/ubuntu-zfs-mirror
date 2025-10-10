@@ -12,6 +12,8 @@ Added `--release=CODENAME` parameter to install different Ubuntu versions.
 - **plucky** (25.04) - Interim release
 - **questing** (25.10) - Latest release
 
+For current Ubuntu releases and codenames, see: https://wiki.ubuntu.com/Releases
+
 **Usage:**
 ```bash
 # Install Ubuntu 24.04 LTS (default)
