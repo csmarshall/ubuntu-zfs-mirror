@@ -1,5 +1,33 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.9.1 - Fix arithmetic expression bug in boot entry cleanup (2025-10-10)
+
+**Critical Bug Fix**
+
+Fixed `set -e` incompatibility in boot entry cleanup counter that could cause rotation to fail.
+
+**The Problem:**
+- Used `((CLEANUP_COUNT++))` post-increment in cleanup loop
+- Post-increment returns old value (0 on first increment)
+- With `set -e`, zero return value causes script to exit
+- Rotation would fail when cleaning up old boot entries
+
+**The Solution:**
+- Changed to `CLEANUP_COUNT=$((CLEANUP_COUNT + 1))`
+- Explicit addition always returns non-zero result
+- Compatible with `set -e`
+- Same bug we've fixed before - added to review checklist
+
+**User Impact:**
+- Fresh installations: Cleanup now works correctly
+- Existing installations: Boot entry rotation won't fail on first cleanup
+- No functional change if no old entries need cleanup
+
+**Files Modified:**
+- `zfs_mirror_setup.sh`: Fixed CLEANUP_COUNT increment
+
+----
+
 ## v6.9.0 - Three-Entry Boot Menu with Automatic Rotation (2025-10-10)
 
 **Major Enhancement: Intelligent Boot Entry Management**

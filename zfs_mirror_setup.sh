@@ -60,7 +60,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.9.0"
+readonly VERSION="6.9.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -3208,7 +3208,7 @@ if [[ "\$SHUTDOWN_MODE" == "true" ]]; then
             if [[ "\$is_expected" == "false" ]]; then
                 log_info "  Removing old/unexpected entry: Boot\$boot_num"
                 if efibootmgr -b "\$boot_num" -B >/dev/null 2>&1; then
-                    ((CLEANUP_COUNT++))
+                    CLEANUP_COUNT=\$((CLEANUP_COUNT + 1))
                 fi
             fi
         fi
