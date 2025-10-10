@@ -1,5 +1,49 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.10.0 - Multi-Architecture Support (2025-10-10)
+
+**Feature Addition: x86_64 and aarch64 Support**
+
+Added automatic architecture detection and support for both x86_64 and aarch64 (ARM64) systems.
+
+**What Changed:**
+- **Early architecture detection** - Script checks architecture before making any changes
+- **Automatic bootloader selection** - Chooses correct EFI bootloader (shimx64.efi vs shimaa64.efi)
+- **Automatic GRUB packages** - Installs correct packages (grub-efi-amd64 vs grub-efi-arm64)
+- **Automatic GRUB target** - Uses correct grub-install target (x86_64-efi vs arm64-efi)
+- **Clear error messages** - Fails immediately on unsupported architectures
+
+**Supported Architectures:**
+- **x86_64** (Intel/AMD 64-bit) - Standard servers and desktops
+- **aarch64** (ARM 64-bit) - ARM servers, AWS Graviton, Raspberry Pi 4+
+
+**How It Works:**
+1. Script runs `uname -m` to detect architecture
+2. Sets appropriate variables:
+   - `EFI_BOOTLOADER` - shimx64.efi or shimaa64.efi
+   - `GRUB_PKG` - grub-efi-amd64 or grub-efi-arm64
+   - `GRUB_PKG_SIGNED` - grub-efi-amd64-signed or grub-efi-arm64-signed
+   - `GRUB_TARGET` - x86_64-efi or arm64-efi
+3. All GRUB installations use architecture-specific variables
+4. Boot entry creation uses correct bootloader path
+
+**Files Modified:**
+- `zfs_mirror_setup.sh`: Added architecture detection and variables
+- `sync-mirror-boot` (in heredoc): Added architecture detection
+- `README.md`: Documented supported architectures
+
+**User Impact:**
+- x86_64 systems: No functional change, same behavior as before
+- aarch64 systems: Now fully supported with correct bootloader
+- Other architectures: Clear error message before any installation
+
+**Why Only x86_64 and aarch64:**
+- Other Ubuntu architectures (ppc64el, s390x) don't use UEFI/GRUB
+- armhf (32-bit ARM) has limited UEFI support
+- These two architectures cover the vast majority of modern servers
+
+----
+
 ## v6.9.2 - Add boot entry creation/validation to sync-mirror-boot (2025-10-10)
 
 **Critical Feature Addition - Self-Healing Boot Entries**

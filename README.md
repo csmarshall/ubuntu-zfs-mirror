@@ -44,8 +44,23 @@ This script creates a ZFS root mirror on two drives for Ubuntu 24.04 Server with
 - Root privileges
 - **UEFI boot mode** (Legacy BIOS/MBR not supported)
 - Internet connection for package installation
+- **Supported architectures**: x86_64 or aarch64 (see below)
 
 **⚠️ UEFI Only**: This script is designed exclusively for UEFI systems and will not work with Legacy BIOS/MBR boot modes. The EFI System Partition and GRUB EFI configuration are essential components of the installation.
+
+### Supported Architectures
+
+This script supports the following processor architectures:
+
+- **x86_64** (Intel/AMD 64-bit)
+  - Standard desktop and server processors
+  - Uses `shimx64.efi` bootloader and `grub-efi-amd64` packages
+
+- **aarch64** (ARM 64-bit)
+  - ARM-based servers and systems (e.g., Ampere, AWS Graviton, Raspberry Pi 4+)
+  - Uses `shimaa64.efi` bootloader and `grub-efi-arm64` packages
+
+**Architecture Detection**: The script automatically detects your system architecture and configures the appropriate bootloader. If you attempt to run the script on an unsupported architecture, it will fail immediately with a clear error message before making any changes to your system.
 
 ## Network Configuration
 
