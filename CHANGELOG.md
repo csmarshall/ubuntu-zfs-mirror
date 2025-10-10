@@ -1,5 +1,29 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.6.1 - Add nofail to fstab entries for degraded boot (2025-10-09)
+
+**Enhancement**
+
+Added `nofail` mount option to swap and EFI fstab entries for graceful degraded operation.
+
+**Why This Matters:**
+- **Degraded boot**: System can boot with only one drive operational
+- **Drive failure resilience**: Missing swap or EFI partition won't prevent boot
+- **No emergency mode**: System continues to boot normally even with failed drive
+- **Swap continues**: Remaining swap partition still functions
+
+**Changes:**
+- Swap entries: `sw,discard,nofail,pri=1` (was `sw,discard,pri=1`)
+- EFI entry: `defaults,nofail` (was `defaults`)
+
+**User Impact:**
+- If one drive fails, system boots normally with degraded ZFS pool
+- Swap continues on remaining drive
+- EFI boot works from remaining drive
+- No manual intervention needed for degraded operation
+
+----
+
 ## v6.6.0 - Automatic boot order rotation and management (2025-10-09)
 
 **Major Enhancement**

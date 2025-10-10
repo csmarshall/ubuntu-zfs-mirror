@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Script metadata
-readonly VERSION="6.6.0"
+readonly VERSION="6.6.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ORIGINAL_REPO="https://github.com/csmarshall/ubuntu-zfs-mirror"
 
@@ -2099,11 +2099,13 @@ cat > /mnt/etc/fstab << 'FSTAB_EOF'
 # ZFS filesystems are handled automatically by ZFS services
 
 # EFI System Partition - will be updated with actual UUID after creation
-# PLACEHOLDER_EFI_UUID /boot/efi vfat defaults 0 1
+# nofail allows boot to continue if EFI partition is unavailable
+# PLACEHOLDER_EFI_UUID /boot/efi vfat defaults,nofail 0 1
 
 # Swap partitions - using device paths for fast failure detection
-PART1_SWAP_PLACEHOLDER none swap sw,discard,pri=1 0 0
-PART2_SWAP_PLACEHOLDER none swap sw,discard,pri=1 0 0
+# nofail allows boot to continue if drive is missing (degraded array)
+PART1_SWAP_PLACEHOLDER none swap sw,discard,nofail,pri=1 0 0
+PART2_SWAP_PLACEHOLDER none swap sw,discard,nofail,pri=1 0 0
 
 # tmpfs for /tmp (recommended for ZFS systems)
 tmpfs /tmp tmpfs defaults,noatime,mode=1777 0 0
