@@ -1,5 +1,33 @@
 # ZFS Mirror Setup Script - Change History
 
+## v6.10.2 - Fix chroot architecture detection (2025-10-10)
+
+**Critical Bug Fix**
+
+Fixed "GRUB_PKG: unbound variable" error during installation when chroot script tried to use architecture-specific variables.
+
+**The Problem:**
+- Main script defined GRUB_PKG, GRUB_PKG_SIGNED, GRUB_TARGET variables
+- But chroot script is generated with single-quoted heredoc (no variable expansion)
+- Chroot script tried to use `$GRUB_PKG` but it was literally that string, not a value
+- Installation failed at package installation step (line 168 in chroot)
+
+**The Solution:**
+- Added architecture detection at the beginning of chroot script
+- Chroot now detects its own architecture and sets package names
+- Same logic as main script: x86_64 → grub-efi-amd64, aarch64 → grub-efi-arm64
+- No dependency on parent script variables
+
+**Changes:**
+- Lines 2171-2188: Added architecture detection to chroot script
+
+**User Impact:**
+- Fresh installations now work (v6.10.0 and v6.10.1 failed in chroot)
+- Both x86_64 and aarch64 systems supported
+- Existing installations unaffected (already have GRUB installed)
+
+----
+
 ## v6.10.1 - Fix blkid hang and regex matching in boot entry creation (2025-10-10)
 
 **Critical Bug Fixes**
